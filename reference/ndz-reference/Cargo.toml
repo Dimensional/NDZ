@@ -1,0 +1,8 @@
+[package]
+name = "ndz-reference"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zstd = "0.13"
+rayon = "1"

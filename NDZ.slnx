@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ndz.Cli/Ndz.Cli.csproj" />
+    <Project Path="src/Ndz.Core/Ndz.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ndz.Core.Tests/Ndz.Core.Tests.csproj" />
+  </Folder>
+</Solution>

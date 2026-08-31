@@ -1,0 +1,18 @@
+# Dependencies for ndztool.py (and patchbench.py).
+#
+#   pip install -r requirements.txt
+#
+# Everything else ndztool.py uses is stdlib: argparse, hashlib, struct, sys,
+# collections, dataclasses, pathlib. Python 3.10+ (match statement-free, but
+# it uses `X | None` type syntax and dataclasses).
+
+# Required. All packing is zstd, and every current .ndz decodes with it.
+# precompute_compress() on a raw-content dictionary, used by --raw-dict and
+# --base, needs a reasonably recent build.
+zstandard>=0.21
+
+# Optional -- only needed to READ older lz4-block packs (flag bit 1 clear).
+# Packing never produces them. Omit this and ndztool still packs and unpacks
+# every zstd pack; it exits with a clear message if it meets an lz4 one.
+# patchbench.py imports it unconditionally, so keep it if you use that too.
+lz4>=4.0

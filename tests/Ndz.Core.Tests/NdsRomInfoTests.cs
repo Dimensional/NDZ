@@ -1,0 +1,44 @@
+using Ndz.Core.Format;
+
+namespace Ndz.Core.Tests;
+
+public class NdsRomInfoTests
+{
+    [Theory]
+    [InlineData((ushort)0, 0x840)]
+    [InlineData((ushort)1, 0x840)]
+    [InlineData((ushort)2, 0x940)]
+    [InlineData((ushort)3, 0xA40)]
+    [InlineData((ushort)0x0103, 0x23C0)]
+    [InlineData((ushort)0xFFFF, 0x23C0)]
+    public void FromRom_SizesBannerByVersion(ushort version, int expectedContentSize)
+    {
+        Assert.Equal(expectedContentSize, NdzConstants.GetBannerContentSize(version));
+
+        // Big enough to fit even the largest (0x23C0) banner variant past the 0x200 offset.
+        byte[] rom = TestRom.Build(0x200 + 0x23C0 + 0x100, bannerVersion: version);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        var expectedBanner = new byte[NdzConstants.BannerSlotLength];
+        rom.AsSpan(0x200, expectedContentSize).CopyTo(expectedBanner);
+
+        Assert.Equal(expectedBanner, info.Banner);
+        // Confirm the tail really is zero-padded, not leftover source bytes.
+        Assert.All(info.Banner.AsSpan(expectedContentSize).ToArray(), b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public void FromRom_TruncatesBannerAtEndOfRom()
+    {
+        // ROM ends partway through what would otherwise be a full 0x23C0 banner.
+        int romSize = 0x200 + 0x1000;
+        byte[] rom = TestRom.Build(romSize, bannerVersion: 0x0103);
+
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        var expectedBanner = new byte[NdzConstants.BannerSlotLength];
+        rom.AsSpan(0x200, romSize - 0x200).CopyTo(expectedBanner);
+
+        Assert.Equal(expectedBanner, info.Banner);
+    }
+}
