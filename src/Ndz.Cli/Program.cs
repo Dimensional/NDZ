@@ -48,8 +48,8 @@ static void PrintUsage()
         ndz - NDS ROM <-> seekable-zstd .ndz converter
 
         Usage:
-          ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N]
-                                          [--no-filters] [--raw-dict <size>] [--base <base.nds>]
+          ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N] [--frame-size N]
+                                          [--no-filters] [--raw-dict <size>] [--base <base.nds>] [--no-verify]
                                                              Compress a decrypted .nds into .ndz.
                                                              --level defaults to 19 and cannot exceed
                                                              {NdzConstants.MaxLevel} - a hardware limit of the
@@ -59,6 +59,13 @@ static void PrintUsage()
                                                              of two, and cannot exceed {NdzConstants.MaxBlockSize} - also a
                                                              hardware limit (bigger blocks take too long
                                                              to fetch and decompress on a cache miss).
+                                                             --frame-size (e.g. 128k) defaults to
+                                                             {NdzConstants.FrameSize} bytes - the outer seek-table
+                                                             bucketing granularity, not a hardware limit (no
+                                                             cap, no power-of-two requirement, just must be
+                                                             >= --block-size); nothing in the file records
+                                                             it, decompress always reads it back correctly
+                                                             from the seek table itself regardless.
                                                              --no-filters skips trying the five per-block
                                                              byte-transform filters (on by default - real,
                                                              brute-force extra compression cost, up to ~6x
@@ -73,7 +80,12 @@ static void PrintUsage()
                                                              decrypted .nds (windowed dictionary
                                                              compression against its content, not a binary
                                                              diff) - the same base must be supplied again
-                                                             to decompress/verify.
+                                                             to decompress/verify. --no-verify skips the
+                                                             default decode-and-byte-compare check that
+                                                             runs after every pack (reads the file back off
+                                                             disk and confirms it decodes to the original
+                                                             before reporting success) - matches
+                                                             ndztool.py's own --no-verify exactly.
           ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>
                                                              Pack a base + base-patched pair into one
                                                              self-contained file - no external base
@@ -123,7 +135,9 @@ static int RunCompress(string[] args)
     string? inPath = null, outPath = null, basePath = null, pairOutPath = null;
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
+    int frameSize = NdzConstants.FrameSize;
     bool enableFilters = true;
+    bool noVerify = false;
     int rawDictionarySize = 0;
 
     for (int i = 0; i < args.Length; i++)
@@ -144,9 +158,21 @@ static int RunCompress(string[] args)
                 return 1;
             }
         }
+        else if (args[i] == "--frame-size")
+        {
+            if (++i >= args.Length || !TryParseSize(args[i], out frameSize))
+            {
+                Console.Error.WriteLine("--frame-size requires a size, e.g. 128k.");
+                return 1;
+            }
+        }
         else if (args[i] == "--no-filters")
         {
             enableFilters = false;
+        }
+        else if (args[i] == "--no-verify")
+        {
+            noVerify = true;
         }
         else if (args[i] == "--raw-dict")
         {
@@ -185,7 +211,8 @@ static int RunCompress(string[] args)
 
     if (inPath is null || (outPath is null && pairOutPath is null))
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--no-filters] [--raw-dict <size>] [--base <base.nds>]");
+        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--frame-size N]");
+        Console.Error.WriteLine("                                       [--no-filters] [--raw-dict <size>] [--base <base.nds>] [--no-verify]");
         Console.Error.WriteLine("   or: ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>");
         return 1;
     }
@@ -208,24 +235,72 @@ static int RunCompress(string[] args)
         Console.Error.WriteLine($"--block-size must be a power of two up to {NdzConstants.MaxBlockSize} (bigger blocks take too long to fetch/decompress on the target hardware).");
         return 1;
     }
+    // Not a hardware limit like block size (no cap, no power-of-two requirement) - just
+    // has to be able to hold at least one block. Matches ndztool.py's own
+    // `if frame_size < block_size: sys.exit(...)`.
+    if (frameSize <= 0 || frameSize < blockSize)
+    {
+        Console.Error.WriteLine("--frame-size must be >= --block-size.");
+        return 1;
+    }
 
     if (pairOutPath != null)
     {
-        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize);
+        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize, frameSize);
         long baseSize = new FileInfo(basePath!).Length, targetSize = new FileInfo(inPath).Length;
         long containerSize = new FileInfo(pairOutPath).Length;
         double pairRatio = containerSize == 0 ? 0 : (double)(baseSize + targetSize) / containerSize;
         Console.WriteLine($"Wrote '{pairOutPath}': {baseSize + targetSize:N0} -> {containerSize:N0} bytes ({pairRatio:F3}x).");
+
+        if (!noVerify && !VerifyPairRoundTrip(pairOutPath, basePath!, inPath))
+            return 1;
         return 0;
     }
 
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath!, (CompressionType)level, blockSize, enableFilters, basePath, rawDictionarySize);
+    NdzWriter.CompressFile(inPath, outPath!, (CompressionType)level, blockSize, enableFilters, basePath, rawDictionarySize, frameSize);
     long compressedSize = new FileInfo(outPath!).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;
     Console.WriteLine($"Wrote '{outPath}': {originalSize:N0} -> {compressedSize:N0} bytes ({ratio:P1}).");
+
+    if (!noVerify && !VerifySingleRoundTrip(outPath!, inPath, basePath))
+        return 1;
     return 0;
+}
+
+/// <summary>
+/// Re-reads <paramref name="outPath"/> from disk (not the in-memory bytes just
+/// compressed - so what's checked is the file as it actually landed, catching a
+/// write-side bug too) and decodes it, comparing byte-for-byte against
+/// <paramref name="inPath"/> - matches `ndztool.py`'s own default post-pack behavior
+/// exactly (its own comment: "so what gets verified is the file on disk read back the
+/// way this tool will actually read it"). On by default; skip with --no-verify.
+/// </summary>
+static bool VerifySingleRoundTrip(string outPath, string inPath, string? basePath)
+{
+    byte[] decoded;
+    using (var archive = NdzArchive.Open(File.ReadAllBytes(outPath), basePath == null ? null : File.ReadAllBytes(basePath)))
+        decoded = archive.DecompressAll();
+
+    bool ok = decoded.AsSpan().SequenceEqual(File.ReadAllBytes(inPath));
+    Console.WriteLine($"  roundtrip    {(ok ? "OK (byte-exact)" : "FAILED")}");
+    return ok;
+}
+
+/// <summary>Like <see cref="VerifySingleRoundTrip"/>, but for a pair container: both entries, the patched one resolved against the freshly re-decoded base (not the original base bytes) - matches `ndztool.py`'s own pair-out verify exactly.</summary>
+static bool VerifyPairRoundTrip(string pairOutPath, string basePath, string targetPath)
+{
+    var pair = NdzPairContainer.ReadFile(pairOutPath);
+    int targetIndex = pair.Entries.Count == 2 ? 1 - pair.PlainEntryIndex : throw new InvalidDataException($"Expected a 2-entry pair container, got {pair.Entries.Count}.");
+
+    byte[] decodedBase = pair.DecompressEntry(pair.PlainEntryIndex);
+    byte[] decodedTarget = pair.DecompressEntry(targetIndex);
+
+    bool ok = decodedBase.AsSpan().SequenceEqual(File.ReadAllBytes(basePath))
+        && decodedTarget.AsSpan().SequenceEqual(File.ReadAllBytes(targetPath));
+    Console.WriteLine($"  roundtrip    {(ok ? "OK (byte-exact)" : "FAILED")}");
+    return ok;
 }
 
 static int RunDecompress(string[] args)
@@ -333,7 +408,11 @@ static int RunInfo(string[] args)
     Console.WriteLine($"Game code:          0x{frontMatter.GameCode:X8}");
     Console.WriteLine($"Original size:      {frontMatter.OriginalSize:N0} bytes");
     Console.WriteLine($"Compressed payload: {compressedTotal:N0} bytes");
-    Console.WriteLine($"Frames:             {seekTable.Count:N0} ({NdzConstants.FrameSize:N0} bytes each, last frame may be shorter)");
+    // Frame size isn't a fixed format-wide value (see NdzConstants.FrameSize's remarks) -
+    // read back the file's own first frame rather than assume the default, so this stays
+    // accurate for a file packed with a non-default --frame-size.
+    long typicalFrameSize = seekTable.Count > 0 ? seekTable[0].DecompressedSize : 0;
+    Console.WriteLine($"Frames:             {seekTable.Count:N0} ({typicalFrameSize:N0} bytes each, last frame may be shorter)");
     Console.WriteLine($"Block size:         {frontMatter.Flags.GetBlockSize():N0} bytes (from flags)");
     Console.WriteLine($"Flags:              0x{(uint)frontMatter.Flags:X8} [{string.Join(", ", namedFlags)}]");
     Console.WriteLine($"Dictionary:         {(frontMatter.HasDictionary ? $"{frontMatter.DictionaryDecompressedSize:N0} bytes (decompressed)" : "none")}");

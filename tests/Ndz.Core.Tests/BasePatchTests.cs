@@ -147,6 +147,37 @@ public class BasePatchTests
         Assert.Throws<InvalidDataException>(() => NdzArchive.Open(output.ToArray(), baseRom: differentBase));
     }
 
+    /// <summary>
+    /// A base ROM under <see cref="BaseRomIndex.WindowSize"/> (16 KiB) is refused up
+    /// front rather than risked - see <see cref="NdzWriter.Compress"/>'s `baseRom`
+    /// remarks for the confirmed-live `ndztool.py` pack-succeeds-then-unpack-fails bug
+    /// this sidesteps. A minimal homebrew binary can genuinely be this small, unlike any
+    /// ordinary commercial ROM.
+    /// </summary>
+    [Fact]
+    public void Compress_WithBaseRomUnderWindowSize_ThrowsArgumentException()
+    {
+        byte[] baseRom = TestRom.Build(BaseRomIndex.WindowSize - 1, gameCode: "BASE");
+        byte[] target = TestRom.Build(NdzConstants.FrameSize, gameCode: "TRGT");
+
+        using var output = new MemoryStream();
+        Assert.Throws<ArgumentException>(() => NdzWriter.Compress(target, output, baseRom: baseRom));
+    }
+
+    /// <summary>The floor is exact: exactly <see cref="BaseRomIndex.WindowSize"/> bytes is accepted.</summary>
+    [Fact]
+    public void Compress_WithBaseRomExactlyAtWindowSize_Succeeds()
+    {
+        byte[] baseRom = TestRom.Build(BaseRomIndex.WindowSize, gameCode: "BASE");
+        byte[] target = TestRom.Build(NdzConstants.FrameSize, gameCode: "TRGT");
+
+        using var output = new MemoryStream();
+        NdzWriter.Compress(target, output, baseRom: baseRom);
+
+        using var archive = NdzArchive.Open(output.ToArray(), baseRom: baseRom);
+        Assert.Equal(target, archive.DecompressAll());
+    }
+
     /// <summary>Matches `ndztool.py`'s own `cmd_info`: never needs `--base`, even for a BasePatch file.</summary>
     [Fact]
     public void ReadInfo_OnBasePatchFile_DoesNotRequireBaseRom()

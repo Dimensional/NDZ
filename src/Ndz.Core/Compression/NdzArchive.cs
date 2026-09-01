@@ -28,6 +28,11 @@ public sealed class NdzArchive : IDisposable
 {
     private readonly byte[] _data;
     private readonly long[] _compressedFrameOffsets;
+    // Cumulative decompressed bytes before frame i - the real source of truth for "which
+    // frame contains decompressed offset X", since frame size isn't a fixed constant (see
+    // Open's remarks). _decompressedFrameStartOffsets[^1] + the last frame's own
+    // DecompressedSize == Length.
+    private readonly long[] _decompressedFrameStartOffsets;
     private readonly ZStdBlock _plainBlock;
     private readonly ZStdBlock? _dictBlock;
     private readonly int _blockSize;
@@ -72,11 +77,14 @@ public sealed class NdzArchive : IDisposable
         _shuffleScratch = new byte[_blockSize];
 
         _compressedFrameOffsets = new long[seekTable.Length];
-        long c = payloadStart;
+        _decompressedFrameStartOffsets = new long[seekTable.Length];
+        long c = payloadStart, d = 0;
         for (int i = 0; i < seekTable.Length; i++)
         {
             _compressedFrameOffsets[i] = c;
+            _decompressedFrameStartOffsets[i] = d;
             c += seekTable[i].CompressedSize;
+            d += seekTable[i].DecompressedSize;
         }
     }
 
@@ -143,18 +151,20 @@ public sealed class NdzArchive : IDisposable
 
         var seekTable = ReadSeekTable(ndzBytes, frontMatter.DictionaryStoredSize, out long payloadStart);
 
-        long expectedFrameCount = frontMatter.OriginalSize == 0
-            ? 0
-            : (frontMatter.OriginalSize + NdzConstants.FrameSize - 1) / NdzConstants.FrameSize;
-        if (seekTable.Length != expectedFrameCount)
-        {
-            throw new InvalidDataException(
-                $"Seek table has {seekTable.Length} frame(s), but originalSize ({frontMatter.OriginalSize}) implies {expectedFrameCount}.");
-        }
-
+        // Frame size isn't a fixed, format-wide constant - ndztool.py's own --frame-size
+        // is a real per-pack choice, and nothing in the front-matter records it (see
+        // NdzWriter.Compress's frameSize remarks), so there's no "expected frame count"
+        // to check independent of the seek table itself. The seek table's own recorded
+        // per-frame decompressed sizes ARE the source of truth for frame boundaries (see
+        // ReadAt/GetDecompressedFrame); every entry must be positive (a zero-size frame
+        // is nonsensical) and the total must reconstruct originalSize exactly.
         long decompressedTotal = 0;
         foreach (var entry in seekTable)
+        {
+            if (entry.DecompressedSize == 0)
+                throw new InvalidDataException("Seek table contains a zero-length frame, which is never valid.");
             decompressedTotal += entry.DecompressedSize;
+        }
         if (decompressedTotal != frontMatter.OriginalSize)
         {
             throw new InvalidDataException(
@@ -225,9 +235,9 @@ public sealed class NdzArchive : IDisposable
         int total = 0;
         while (total < destination.Length && offset + total < Length)
         {
-            int frameIndex = (int)((offset + total) / NdzConstants.FrameSize);
+            int frameIndex = FindFrameIndex(offset + total);
             byte[] frameData = GetDecompressedFrame(frameIndex);
-            int frameLocalOffset = (int)((offset + total) - (long)frameIndex * NdzConstants.FrameSize);
+            int frameLocalOffset = (int)(offset + total - _decompressedFrameStartOffsets[frameIndex]);
 
             int available = frameData.Length - frameLocalOffset;
             int toCopy = Math.Min(available, destination.Length - total);
@@ -236,6 +246,17 @@ public sealed class NdzArchive : IDisposable
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// Binary-searches <see cref="_decompressedFrameStartOffsets"/> for the frame
+    /// containing decompressed offset <paramref name="offset"/> (which must be &lt;
+    /// <see cref="Length"/>) - the last frame whose start is &lt;= <paramref name="offset"/>.
+    /// </summary>
+    private int FindFrameIndex(long offset)
+    {
+        int index = Array.BinarySearch(_decompressedFrameStartOffsets, offset);
+        return index >= 0 ? index : ~index - 1;
     }
 
     /// <summary>Decompresses the entire archive back into the original .nds bytes.</summary>

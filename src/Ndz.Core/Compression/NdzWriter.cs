@@ -34,6 +34,18 @@ public static class NdzWriter
     /// fixed choice) - block size is a real per-file variable in the format (see
     /// <see cref="NdzFlagsExtensions"/>'s remarks), not something every writer must fix.
     /// </param>
+    /// <param name="frameSize">
+    /// Outer seek-table bucketing granularity in bytes - NOT a hardware constraint like
+    /// <paramref name="blockSize"/> (no cap, no power-of-two requirement), just how many
+    /// bytes one seek-table entry covers; must be at least <paramref name="blockSize"/>
+    /// so a frame can hold at least one block, matching `ndztool.py`'s own
+    /// `frame_size &gt;= block_size` check. Unlike block size, nothing in the front-matter
+    /// records this - <see cref="Compression.NdzArchive"/> derives each frame's real
+    /// decompressed extent from the seek table's own per-frame sizes, never from this
+    /// default, so a file written with a non-default frame size still opens correctly.
+    /// `pack.rs` hardcodes this at 128 KiB with no override; `ndztool.py`'s own
+    /// `--frame-size` (default `128k`) is the more flexible reference this mirrors.
+    /// </param>
     /// <param name="enableFilters">
     /// Try the five byte-transform filter modes (see <see cref="BlockMode"/>/
     /// <see cref="BlockFilters"/>) on every full block, keeping whichever of plain/dict/
@@ -59,6 +71,18 @@ public static class NdzWriter
     /// <c>baseRom</c> parameter) - it is never stored in the output, only its size, game
     /// code, and an 8-byte BLAKE2b header hash, checked against whatever base is
     /// supplied at decode time.
+    ///
+    /// A base ROM shorter than <see cref="Compression.BaseRomIndex.WindowSize"/> (16 KiB)
+    /// is refused outright (<see cref="ArgumentException"/>) rather than risked: it's a
+    /// real, confirmed-live edge case in `ndztool.py` itself, not just this port - its own
+    /// encoder permissively clamps a too-short window (Python slicing just returns fewer
+    /// bytes), but its own decoder's bounds check (`boff + NDZ_BASE_WINDOW > len(base)`)
+    /// doesn't account for that, so a pack that happens to pick a base-window candidate
+    /// can succeed there and then fail to unpack with "base window out of range" -
+    /// verified directly against the real tool, which has no equivalent guard at all. No
+    /// ordinary commercial `.nds` is anywhere near this small, but a minimal homebrew
+    /// binary genuinely can be, so this is refused up front with a clear reason instead of
+    /// silently reproducing `ndztool.py`'s own latent pack-succeeds-then-unpack-fails trap.
     /// </param>
     /// <param name="rawDictionarySize">
     /// Target size (bytes) for a raw-content dictionary derived from <paramref name="rom"/>'s
@@ -72,7 +96,7 @@ public static class NdzWriter
     /// of useful duplicate content, no dictionary is stored even though this was
     /// nonzero - matches `ndztool.py`'s own `if len(raw_dict) >= 4096` gate exactly.
     /// </param>
-    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null, int rawDictionarySize = 0)
+    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
     {
         ArgumentNullException.ThrowIfNull(rom);
         ArgumentNullException.ThrowIfNull(output);
@@ -80,8 +104,27 @@ public static class NdzWriter
             throw new ArgumentException("Output stream must be writable.", nameof(output));
         if (baseRom != null && baseRom.Length < NdzConstants.NdsHeader.HeaderLength)
             throw new ArgumentException($"Base ROM is only {baseRom.Length} bytes; too small to be an .nds ROM.", nameof(baseRom));
+        // Below BaseRomIndex.WindowSize, a base-window candidate (if one ever gets picked)
+        // can't be safely round-tripped - see baseRom's own remarks above for the
+        // confirmed-live ndztool.py bug this sidesteps. Refuse up front rather than risk
+        // producing a file that unpacks fine today and traps someone later.
+        if (baseRom != null && baseRom.Length < BaseRomIndex.WindowSize)
+        {
+            throw new ArgumentException(
+                $"Base ROM is only {baseRom.Length:N0} bytes; base-patch mode needs at least " +
+                $"{BaseRomIndex.WindowSize:N0} bytes ({nameof(BaseRomIndex)}.{nameof(BaseRomIndex.WindowSize)}) " +
+                "to form a full base-window candidate.", nameof(baseRom));
+        }
         if (blockSize <= 0 || (blockSize & (blockSize - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(blockSize), blockSize, "Block size must be a positive power of two.");
+        // Frame size has no power-of-two requirement (unlike block size) - it's purely a
+        // seek-table bucketing choice, not a hardware decode-granularity constraint, and
+        // ndztool.py never requires it. It does need to be able to hold at least one
+        // block, matching ndztool.py's own `if frame_size < block_size: sys.exit(...)`.
+        if (frameSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(frameSize), frameSize, "Frame size must be positive.");
+        if (frameSize < blockSize)
+            throw new ArgumentOutOfRangeException(nameof(frameSize), frameSize, "Frame size must be >= block size.");
         // Hardware ceilings, not preferences - see NdzConstants.MaxBlockSize/MaxLevel's
         // remarks. ndztool.py refuses to pack past either rather than silently produce a
         // file that "packs fine and then fails on real hardware"; matched here. The level
@@ -161,7 +204,7 @@ public static class NdzWriter
         if (dictionaryContent != null)
             output.Write(dictionaryContent);
 
-        int frameCount = rom.Length == 0 ? 0 : (rom.Length + NdzConstants.FrameSize - 1) / NdzConstants.FrameSize;
+        int frameCount = rom.Length == 0 ? 0 : (rom.Length + frameSize - 1) / frameSize;
         var frames = new byte[frameCount][];
         var seekTable = new SeekTableEntry[frameCount];
         var plainOptions = new CompressionOptions { Type = level, BlockSize = blockSize };
@@ -185,8 +228,8 @@ public static class NdzWriter
             localInit: () => (Plain: new ZStdBlock(plainOptions), Dict: dictOptions == null ? null : new ZStdBlock(dictOptions)),
             body: (f, _, threadLocalBlocks) =>
             {
-                int frameOffset = f * NdzConstants.FrameSize;
-                int frameLength = Math.Min(NdzConstants.FrameSize, rom.Length - frameOffset);
+                int frameOffset = f * frameSize;
+                int frameLength = Math.Min(frameSize, rom.Length - frameOffset);
                 (frames[f], seekTable[f]) = CompressFrame(rom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters, baseIndex, level);
                 return threadLocalBlocks;
             },
@@ -202,12 +245,12 @@ public static class NdzWriter
         WriteTrailer(output, seekTable);
     }
 
-    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null, int rawDictionarySize = 0)
+    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
     {
         byte[] rom = File.ReadAllBytes(inputNdsPath);
         byte[]? baseRom = baseRomPath == null ? null : File.ReadAllBytes(baseRomPath);
         using var output = File.Create(outputNdzPath);
-        Compress(rom, output, level, blockSize, enableFilters, baseRom, rawDictionarySize);
+        Compress(rom, output, level, blockSize, enableFilters, baseRom, rawDictionarySize, frameSize);
     }
 
     /// <summary>

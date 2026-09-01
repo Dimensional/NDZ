@@ -62,8 +62,16 @@ public static class NdzConstants
 
     /// <summary>
     /// The unit the outer seek table addresses - what the format's ASCII diagram calls
-    /// "frame 0, frame 1, ...". 128 KiB. Confirmed against the reference packer's
-    /// `FRAME` constant. This is NOT the 8 KiB unit - see <see cref="BlockSize"/>.
+    /// "frame 0, frame 1, ...". 128 KiB, confirmed against the reference packer's `FRAME`
+    /// constant. This is NOT the 8 KiB unit - see <see cref="BlockSize"/>.
+    ///
+    /// This is only ever a *default*, not a fixed format-wide value: `pack.rs` hardcodes
+    /// it with no override, but `ndztool.py`'s own `--frame-size` is a real per-pack
+    /// choice, and nothing in the front-matter records whichever value was actually used
+    /// - <see cref="Compression.NdzArchive"/> derives real frame boundaries from the seek
+    /// table's own per-frame sizes, never from this constant, so it correctly opens a
+    /// file packed with any frame size. See <see cref="Compression.NdzWriter"/>'s
+    /// `frameSize` parameter.
     /// </summary>
     public const int FrameSize = 128 * 1024;
 
