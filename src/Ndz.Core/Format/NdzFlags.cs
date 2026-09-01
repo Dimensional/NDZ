@@ -62,16 +62,22 @@ public enum NdzFlags : uint
     /// <summary>
     /// Bit 4: this file's frames encode a patch against a base .nds (see the
     /// BaseOriginalSize/BaseGameCode/BaseHeaderHash front-matter fields) rather than the
-    /// ROM's own bytes. Not implemented - see NdzFrontMatter.Read's remarks.
+    /// ROM's own bytes - windowed raw-dictionary compression against the base ROM's own
+    /// content, not a binary diff. Implemented (2026-08-31) - see
+    /// <see cref="Compression.NdzWriter"/>'s `baseRom` parameter and
+    /// <see cref="Compression.NdzArchive.Open"/>'s.
     /// </summary>
     BasePatch = 1u << 4,
 
     /// <summary>
     /// Bit 5. A raw (untrained, self-referential - extracted from the ROM's own
     /// repeated content) dictionary section follows the front-matter. Implemented here -
-    /// see <see cref="NdzDictionary"/>. `ndztool.py`'s `NDZ_FLAG_RAWDICT`; its own packer
-    /// always sets <see cref="Filters"/> alongside this bit too (matched by `NdzWriter`,
-    /// which sets `Filters` unconditionally regardless).
+    /// see <see cref="Compression.RawDictionaryBuilder"/> (derives the dictionary from
+    /// the ROM itself, given only a size - the only way either reference implementation
+    /// ever builds one) and <see cref="Compression.NdzWriter"/>'s `rawDictionarySize`
+    /// parameter. `ndztool.py`'s `NDZ_FLAG_RAWDICT`; its own packer always sets
+    /// <see cref="Filters"/> alongside this bit too (matched by `NdzWriter`, which sets
+    /// `Filters` unconditionally regardless).
     /// </summary>
     RawDictionary = 1u << 5,
 

@@ -1,4 +1,3 @@
-using System.Linq;
 using Ndz.Core.Compression;
 using Ndz.Core.Format;
 
@@ -11,73 +10,86 @@ namespace Ndz.Core.Tests;
 /// (clevels.h's size-tiered parameter tables, zstd_compress.c's
 /// ZSTD_adjustCParams_internal, which only ever shrinks the window, never grows it).
 /// GrindCore 0.9.0 added an explicit windowLog override for exactly this
-/// (<see cref="CompressionDictionaryOptions.WindowBits"/>), which
-/// <see cref="NdzWriter"/> now uses (see its <c>ComputeDictionaryWindowBits</c>).
+/// (<see cref="CompressionDictionaryOptions.WindowBits"/>), which `NdzWriter` uses (see
+/// its <c>ComputeDictionaryWindowBits</c>, `internal` specifically so this class can
+/// reach it).
 ///
-/// This test proves that override is actually wired up and taking effect - not just
-/// that the code compiles - by placing matching content deliberately *beyond* the old
-/// 8 MiB ceiling, where only a correctly-sized window can reach it.
+/// Now that dictionary content is always derived from the ROM itself
+/// (<see cref="RawDictionaryBuilder"/> - see its remarks for why), an end-to-end test
+/// genuinely past the old 8 MiB ceiling isn't practical to construct: only one
+/// representative copy of each unique repeated chunk is ever included, so reaching
+/// 8+ MiB of real derived content would need hundreds of distinct duplicate chunks.
+/// This checks the windowLog *calculation* directly for sizes past that ceiling instead
+/// - the GrindCore wiring itself (passing the computed value through
+/// `CompressionDictionaryOptions.WindowBits`) is unchanged code, already proven to take
+/// real effect end-to-end in this project's history (see docs/ndz-format-spec.md's
+/// "Dictionary window sizing" section) - plus one real end-to-end test with a large
+/// (multi-MiB, under the ceiling) derived dictionary to confirm the whole pipeline still
+/// works correctly for genuinely big dictionaries, not just the arithmetic in isolation.
 /// </summary>
 public class DictionaryWindowSizingTests
 {
-    [Fact]
-    public void Compress_WithDictionaryLargerThan8MiB_CanReferenceContentPastTheOldWindowCeiling()
+    private const int EightMiB = 8 * 1024 * 1024;
+
+    [Theory]
+    [InlineData(0, 8192, 15)] // empty dictionary still gets NdzWriter's own floor
+    [InlineData(256 * 1024, 8192, 19)] // wlog(256K+8K-1)+1 = 19
+    [InlineData(EightMiB, 8192, 24)] // past the old implicit ceiling - still computed correctly
+    [InlineData(EightMiB + 8192 * 4, 8192, 24)]
+    [InlineData(64 * 1024 * 1024, 8192, 27)] // well past it
+    public void ComputeDictionaryWindowBits_CoversTheWholeDictionaryPlusOneBlock(int dictionaryLength, int blockSize, int expectedBits)
     {
-        const int eightMiB = 8 * 1024 * 1024;
+        int bits = NdzWriter.ComputeDictionaryWindowBits(dictionaryLength, blockSize);
+        Assert.Equal(expectedBits, bits);
 
-        var dictionary = new byte[eightMiB + NdzConstants.BlockSize * 4]; // past the old ceiling
-        new Random(1).NextBytes(dictionary);
-
-        var sharedPattern = new byte[NdzConstants.BlockSize];
-        new Random(2).NextBytes(sharedPattern);
-        // Placed at the very end - unreachable under the old implicit 8 MiB window,
-        // reachable only if the window was actually sized to cover the whole dictionary.
-        Array.Copy(sharedPattern, 0, dictionary, dictionary.Length - sharedPattern.Length, sharedPattern.Length);
-
-        byte[] rom = TestRom.Build(NdzConstants.FrameSize);
-        Array.Copy(sharedPattern, 0, rom, NdzConstants.FrameSize - NdzConstants.BlockSize, sharedPattern.Length);
-
-        using var withDict = new MemoryStream();
-        NdzWriter.Compress(rom, withDict, dictionary: new NdzDictionary { Content = dictionary });
-
-        using var withoutDict = new MemoryStream();
-        NdzWriter.Compress(rom, withoutDict);
-
-        // Compare compressed *payload* size only, not whole-file size - the dictionary
-        // itself is stored verbatim in the file (8+ MiB here), which would otherwise
-        // completely swamp the small effect this test is actually trying to isolate.
-        using var withDictArchive = NdzArchive.Open(withDict.ToArray());
-        using var withoutDictArchive = NdzArchive.Open(withoutDict.ToArray());
-        long withDictPayload = withDictArchive.SeekTable.Sum(e => (long)e.CompressedSize);
-        long withoutDictPayload = withoutDictArchive.SeekTable.Sum(e => (long)e.CompressedSize);
-
-        // If the far-placed pattern weren't reachable, dictionary-primed compression
-        // would do no better than plain for this block (nothing else in `rom` or
-        // `dictionary` is shared) - so a smaller result here specifically demonstrates
-        // the window reaches content beyond the old 8 MiB ceiling, not just that
-        // dictionaries work at all (DictionaryRoundTripTests already covers that).
-        Assert.True(withDictPayload < withoutDictPayload,
-            $"Expected the dictionary to help compress a block matching content placed beyond the " +
-            $"old 8 MiB window ceiling ({withDictPayload} vs {withoutDictPayload} payload bytes) - if " +
-            "this fails, the WindowBits override may not be taking effect.");
+        // The defining property, regardless of the exact expected value above: a window
+        // of this size must be able to address every byte of dictionary + one block.
+        long window = 1L << bits;
+        Assert.True(window >= (long)dictionaryLength + blockSize);
     }
 
     [Fact]
-    public void Compress_WithDictionaryLargerThan8MiB_StillRoundTripsByteIdentical()
+    public void ComputeDictionaryWindowBits_StaysWithinGrindCoresAcceptedRange()
     {
-        const int eightMiB = 8 * 1024 * 1024;
+        foreach (int size in new[] { 0, 1, 1024, EightMiB, int.MaxValue / 2 })
+        {
+            int bits = NdzWriter.ComputeDictionaryWindowBits(size, NdzConstants.BlockSize);
+            Assert.InRange(bits, 10, 31);
+        }
+    }
 
-        var dictionary = new byte[eightMiB + NdzConstants.BlockSize * 4];
-        new Random(3).NextBytes(dictionary);
+    /// <summary>
+    /// Builds a ROM whose derived dictionary is genuinely large (several hundred KiB+) -
+    /// not past the old 8 MiB ceiling (impractical to construct for real, see the class
+    /// remarks: repeating one pattern many times only ever contributes *one* copy of it
+    /// to the dictionary, capping achievable size at that one pattern's own length no
+    /// matter how many times it repeats), but big enough to meaningfully exercise
+    /// WindowBits (the old ceiling already bites above 256 KiB), not just the small
+    /// sizes <see cref="DictionaryRoundTripTests"/> covers.
+    /// </summary>
+    [Fact]
+    public void Compress_WithLargeDerivedDictionary_RoundTripsByteIdentical()
+    {
+        const int patternSize = 1024 * 1024; // 1 MiB - the ceiling on unique content this test can derive
+        const int repeatCount = 20;
 
-        byte[] rom = TestRom.Build(NdzConstants.FrameSize * 2);
+        byte[] rom = TestRom.Build(NdzConstants.FrameSize + patternSize * repeatCount);
+        var pattern = new byte[patternSize];
+        new Random(7).NextBytes(pattern);
+
+        int start = NdzConstants.FrameSize;
+        for (int i = 0; i < repeatCount; i++)
+            pattern.CopyTo(rom, start + i * patternSize);
 
         using var output = new MemoryStream();
-        NdzWriter.Compress(rom, output, dictionary: new NdzDictionary { Content = dictionary });
+        NdzWriter.Compress(rom, output, rawDictionarySize: 2 * 1024 * 1024);
 
         using var archive = NdzArchive.Open(output.ToArray());
-        byte[] rebuilt = archive.DecompressAll();
+        Assert.True(archive.FrontMatter.HasDictionary);
+        Assert.True(archive.FrontMatter.DictionaryStoredSize > 256 * 1024,
+            $"Expected a several-hundred-KiB+ derived dictionary to actually exercise WindowBits, got {archive.FrontMatter.DictionaryStoredSize} bytes.");
 
+        byte[] rebuilt = archive.DecompressAll();
         Assert.Equal(rom, rebuilt);
     }
 }

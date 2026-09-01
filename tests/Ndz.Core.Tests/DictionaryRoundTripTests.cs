@@ -4,43 +4,52 @@ using Ndz.Core.Format;
 namespace Ndz.Core.Tests;
 
 /// <summary>
-/// Real dictionary compression, on GrindCore's official 0.9.0 NuGet release (see
-/// NdzDictionary's remarks). Mirrors the reference packer's own motivating case: a raw
-/// content dictionary built from the ROM's own repeated content, helping blocks that
-/// share content with each other but are too far apart for a per-block-blind plain
-/// compressor to see.
+/// Real dictionary compression, on GrindCore's official 0.9.0 NuGet release. Mirrors
+/// the reference packer's own motivating case: a raw content dictionary built from the
+/// ROM's own repeated content, helping blocks that share content with each other but
+/// are too far apart for a per-block-blind plain compressor to see. The dictionary
+/// content itself is derived from the ROM by <see cref="RawDictionaryBuilder"/> (see
+/// <see cref="RawDictionaryBuilderTests"/> for that algorithm's own correctness,
+/// cross-checked byte-for-byte against `ndztool.py`) - `NdzWriter.Compress`'s
+/// `rawDictionarySize` is the *only* dictionary input either reference implementation
+/// ever exposes (a size, never externally-supplied content - see
+/// `RawDictionaryBuilder`'s remarks for why this project no longer has a
+/// `--dict &lt;file&gt;`-shaped option).
 /// </summary>
 public class DictionaryRoundTripTests
 {
     /// <summary>
-    /// Builds a ROM where every other 8 KB block (from a point past the header/banner)
-    /// is byte-for-byte the same repeating pattern - isolated from its other
-    /// occurrences by intervening random-filler blocks, so only a whole-file dictionary
-    /// (not per-block matching) can exploit the repetition. Returns the ROM and that
-    /// pattern, since a real dictionary is exactly this kind of content extracted from
-    /// the file itself.
+    /// Builds a ROM with a long, back-to-back repeated pattern occupying a large
+    /// contiguous region - reliably produces content-defined chunks that repeat
+    /// (<see cref="RawDictionaryBuilderTests.Build_OnDeliberatelyRepeatedContent_FindsIt"/>
+    /// established this construction works even from a cold start; scattered, isolated
+    /// repeats surrounded by different content on each occurrence do *not* reliably
+    /// produce duplicate chunks, since the chunker's rolling hash accumulates from each
+    /// chunk's own start rather than a fixed window - see that same test class).
     /// </summary>
-    private static (byte[] Rom, byte[] SharedPattern) BuildRomWithRepeatedContent(int totalSize, int seed)
+    private static byte[] BuildRomWithRepeatedContent(int totalSize, int seed)
     {
         byte[] rom = TestRom.Build(totalSize, seed: seed);
 
-        var shared = new byte[NdzConstants.BlockSize];
-        new Random(seed ^ 0x5EED).NextBytes(shared);
+        var pattern = new byte[NdzConstants.BlockSize];
+        new Random(seed ^ 0x5EED).NextBytes(pattern);
 
-        for (int off = NdzConstants.BlockSize * 4; off + NdzConstants.BlockSize <= totalSize; off += NdzConstants.BlockSize * 2)
-            Array.Copy(shared, 0, rom, off, NdzConstants.BlockSize);
+        int repeatStart = NdzConstants.BlockSize * 2;
+        for (int off = repeatStart; off + pattern.Length <= rom.Length; off += pattern.Length)
+            pattern.CopyTo(rom, off);
 
-        return (rom, shared);
+        return rom;
     }
 
+    private const int DictSize = 32 * 1024;
+
     [Fact]
-    public void Compress_WithDictionary_RoundTripsByteIdentical()
+    public void Compress_WithRawDictionarySize_RoundTripsByteIdentical()
     {
-        var (original, sharedPattern) = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 1);
-        var dictionary = new NdzDictionary { Content = sharedPattern };
+        byte[] original = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 1);
 
         using var output = new MemoryStream();
-        NdzWriter.Compress(original, output, dictionary: dictionary);
+        NdzWriter.Compress(original, output, rawDictionarySize: DictSize);
 
         using var archive = NdzArchive.Open(output.ToArray());
         byte[] rebuilt = archive.DecompressAll();
@@ -49,29 +58,32 @@ public class DictionaryRoundTripTests
     }
 
     [Fact]
-    public void Compress_WithDictionary_SetsFrontMatterFields()
+    public void Compress_WithRawDictionarySize_SetsFrontMatterFields()
     {
-        var (original, sharedPattern) = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 2);
-        var dictionary = new NdzDictionary { Content = sharedPattern };
+        byte[] original = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 2);
 
         using var output = new MemoryStream();
-        NdzWriter.Compress(original, output, dictionary: dictionary);
+        NdzWriter.Compress(original, output, rawDictionarySize: DictSize);
         using var archive = NdzArchive.Open(output.ToArray());
 
         Assert.True(archive.FrontMatter.HasDictionary);
         Assert.True(archive.FrontMatter.Flags.HasFlag(NdzFlags.RawDictionary));
-        Assert.Equal((uint)sharedPattern.Length, archive.FrontMatter.DictionaryStoredSize);
-        Assert.Equal((uint)sharedPattern.Length, archive.FrontMatter.DictionaryDecompressedSize);
+        Assert.True(archive.FrontMatter.DictionaryStoredSize is > 0 and <= DictSize);
+        Assert.Equal(archive.FrontMatter.DictionaryStoredSize, archive.FrontMatter.DictionaryDecompressedSize);
+
+        // The stored dictionary should actually match what RawDictionaryBuilder derives
+        // from this exact ROM at this exact size - not just be "some" nonempty content.
+        byte[] expectedDictionary = RawDictionaryBuilder.Build(original, DictSize);
+        Assert.Equal(expectedDictionary.Length, (int)archive.FrontMatter.DictionaryStoredSize);
     }
 
     [Fact]
-    public void Compress_WithDictionary_ProducesSmallerOutput_ThanWithoutDictionary()
+    public void Compress_WithRawDictionarySize_ProducesSmallerOutput_ThanWithoutDictionary()
     {
-        var (original, sharedPattern) = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 3);
-        var dictionary = new NdzDictionary { Content = sharedPattern };
+        byte[] original = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 3);
 
         using var withDict = new MemoryStream();
-        NdzWriter.Compress(original, withDict, dictionary: dictionary);
+        NdzWriter.Compress(original, withDict, rawDictionarySize: DictSize);
 
         using var withoutDict = new MemoryStream();
         NdzWriter.Compress(original, withoutDict);
@@ -84,16 +96,15 @@ public class DictionaryRoundTripTests
     }
 
     [Fact]
-    public void Compress_WithDictionary_UsesDictModeForAtLeastOneBlock()
+    public void Compress_WithRawDictionarySize_UsesDictModeForAtLeastOneBlock()
     {
         // Confirms the per-block adaptive choice actually happens by directly reading
         // the raw mode bytes out of the written file - not just inferring it from a
         // smaller total size (which the sibling test already covers).
-        var (original, sharedPattern) = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 4);
-        var dictionary = new NdzDictionary { Content = sharedPattern };
+        byte[] original = BuildRomWithRepeatedContent(NdzConstants.FrameSize * 2, seed: 4);
 
         using var output = new MemoryStream();
-        NdzWriter.Compress(original, output, dictionary: dictionary);
+        NdzWriter.Compress(original, output, rawDictionarySize: DictSize);
         byte[] bytes = output.ToArray();
 
         using var archive = NdzArchive.Open(bytes);
@@ -113,5 +124,22 @@ public class DictionaryRoundTripTests
         }
 
         Assert.True(dictModeCount > 0, "Expected at least one block to pick BlockMode.Dict over BlockMode.Plain.");
+    }
+
+    [Fact]
+    public void Compress_WithRawDictionarySizeTooSmallToFindAnything_ProducesNoDictionarySection()
+    {
+        // Ordinary TestRom content has no meaningful repeated structure at all, so even
+        // a nonzero rawDictionarySize should find nothing worth storing - matches
+        // ndztool.py's own `if len(raw_dict) >= 4096` gate (an empty/tiny derived
+        // dictionary just doesn't get stored or flagged).
+        byte[] original = TestRom.Build(NdzConstants.FrameSize);
+
+        using var output = new MemoryStream();
+        NdzWriter.Compress(original, output, rawDictionarySize: DictSize);
+        using var archive = NdzArchive.Open(output.ToArray());
+
+        Assert.False(archive.FrontMatter.HasDictionary);
+        Assert.False(archive.FrontMatter.Flags.HasFlag(NdzFlags.RawDictionary));
     }
 }

@@ -25,15 +25,20 @@ unimplemented is a retired, never-produced trained-dictionary flag not worth bui
 
 ```
 ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N]
-                                 [--no-filters] [--dict <file>] [--base <base.nds>]
+                                 [--no-filters] [--raw-dict <size>] [--base <base.nds>]
                                                   Compress a decrypted .nds into .ndz.
-                                                  --dict primes compression with a raw
-                                                  content dictionary. --base patches
-                                                  against a second, already-decrypted
-                                                  .nds. --level and --block-size (default
-                                                  8192, power of two) are capped at the
-                                                  target hardware's decode-speed limits -
-                                                  see "Hardware limits" below.
+                                                  --raw-dict (e.g. 8m, 512k) derives a
+                                                  dictionary from this ROM's own repeated
+                                                  content, up to that size - there's no
+                                                  option to load externally-supplied
+                                                  dictionary content, because neither
+                                                  reference implementation has one either.
+                                                  --base patches against a second,
+                                                  already-decrypted .nds. --level and
+                                                  --block-size (default 8192, power of
+                                                  two) are capped at the target
+                                                  hardware's decode-speed limits - see
+                                                  "Hardware limits" below.
 ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>
                                                   Pack a base + base-patched pair into one
                                                   self-contained file.

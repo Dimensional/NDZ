@@ -23,7 +23,7 @@ public static class NdzPairWriter
     /// <paramref name="output"/>.
     /// </summary>
     public static void Write(Stream output, byte[] baseRom, byte[] targetRom,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(baseRom);
@@ -33,12 +33,15 @@ public static class NdzPairWriter
         if (baseRom.Length < NdzConstants.NdsHeader.HeaderLength)
             throw new ArgumentException($"Base ROM is only {baseRom.Length} bytes; too small to be an .nds ROM.", nameof(baseRom));
 
+        // rawDictionarySize applies to both sub-packs, matching ndztool.py's own
+        // cmd_pack --pair-out (it passes the same raw_dict_size to both pack_ndz_blob
+        // calls) - each ROM gets its own dictionary derived from its own content.
         using var baseStream = new MemoryStream();
-        NdzWriter.Compress(baseRom, baseStream, level, dictionary: null, blockSize, enableFilters);
+        NdzWriter.Compress(baseRom, baseStream, level, blockSize, enableFilters, baseRom: null, rawDictionarySize);
         byte[] baseBlob = baseStream.ToArray();
 
         using var targetStream = new MemoryStream();
-        NdzWriter.Compress(targetRom, targetStream, level, dictionary: null, blockSize, enableFilters, baseRom: baseRom);
+        NdzWriter.Compress(targetRom, targetStream, level, blockSize, enableFilters, baseRom: baseRom, rawDictionarySize);
         byte[] targetBlob = targetStream.ToArray();
 
         const int align = NdzConstants.FrontMatterSize;
@@ -65,12 +68,12 @@ public static class NdzPairWriter
     }
 
     public static void WriteFile(string outputPath, string baseRomPath, string targetRomPath,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0)
     {
         byte[] baseRom = File.ReadAllBytes(baseRomPath);
         byte[] targetRom = File.ReadAllBytes(targetRomPath);
         using var output = File.Create(outputPath);
-        Write(output, baseRom, targetRom, level, blockSize, enableFilters);
+        Write(output, baseRom, targetRom, level, blockSize, enableFilters, rawDictionarySize);
     }
 
     private static void WriteEntry(byte[] header, int index, uint blobOffset, uint size, uint originalSize, uint gameCode)

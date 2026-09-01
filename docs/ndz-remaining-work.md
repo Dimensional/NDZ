@@ -119,8 +119,9 @@ compression against a second ROM, not a diff algorithm.
   (deduped into a set, capped at 8 total candidates) - each is a 16 KiB window into the
   base ROM.
 - **Per-candidate compression**: the window is used as a raw-content zstd dictionary
-  (exactly `NdzDictionary`'s existing mechanism, just built from a base-ROM slice
-  instead of the target ROM's own content) to compress the block; whichever candidate
+  (the same `InitProperties`-primed `ZStdBlock` mechanism `RawDictionary` blocks use,
+  just built from a base-ROM slice instead of the target ROM's own content) to compress
+  the block; whichever candidate
   (or plain/dict/filter, if none help) is smallest wins. The winning window's **byte
   offset** is recorded per block, not the window's content - `u32 baseOff[n]`, sentinel
   `0xFFFFFFFF` for "no base window used". A win is tagged mode `Plain` (not a new mode

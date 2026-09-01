@@ -49,7 +49,7 @@ static void PrintUsage()
 
         Usage:
           ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N]
-                                          [--no-filters] [--dict <file>] [--base <base.nds>]
+                                          [--no-filters] [--raw-dict <size>] [--base <base.nds>]
                                                              Compress a decrypted .nds into .ndz.
                                                              --level defaults to 19 and cannot exceed
                                                              {NdzConstants.MaxLevel} - a hardware limit of the
@@ -62,9 +62,13 @@ static void PrintUsage()
                                                              --no-filters skips trying the five per-block
                                                              byte-transform filters (on by default - real,
                                                              brute-force extra compression cost, up to ~6x
-                                                             more zstd calls per full block). --dict primes
-                                                             compression with a raw content dictionary (its
-                                                             bytes are stored verbatim in the output too).
+                                                             more zstd calls per full block). --raw-dict
+                                                             <size> (e.g. 8m, 512k) derives a dictionary
+                                                             from this ROM's own repeated content, up to
+                                                             that size - the only way either reference
+                                                             implementation ever builds one; there is no
+                                                             option to load externally-supplied dictionary
+                                                             content, because neither reference has one.
                                                              --base patches against a second, already-
                                                              decrypted .nds (windowed dictionary
                                                              compression against its content, not a binary
@@ -96,12 +100,31 @@ static void PrintUsage()
         """);
 }
 
+/// <summary>Parses a size like "8m", "512k", or a plain byte count - matches `ndztool.py`'s own `parse_size`.</summary>
+static bool TryParseSize(string text, out int size)
+{
+    size = 0;
+    string s = text.Trim().ToLowerInvariant();
+    int multiplier = 1;
+    if (s.EndsWith('k')) { multiplier = 1024; s = s[..^1]; }
+    else if (s.EndsWith('m')) { multiplier = 1024 * 1024; s = s[..^1]; }
+
+    if (!long.TryParse(s, out long value))
+        return false;
+    long result = value * multiplier;
+    if (result < 0 || result > int.MaxValue)
+        return false;
+    size = (int)result;
+    return true;
+}
+
 static int RunCompress(string[] args)
 {
-    string? inPath = null, outPath = null, dictPath = null, basePath = null, pairOutPath = null;
+    string? inPath = null, outPath = null, basePath = null, pairOutPath = null;
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
     bool enableFilters = true;
+    int rawDictionarySize = 0;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -125,14 +148,13 @@ static int RunCompress(string[] args)
         {
             enableFilters = false;
         }
-        else if (args[i] == "--dict")
+        else if (args[i] == "--raw-dict")
         {
-            if (++i >= args.Length)
+            if (++i >= args.Length || !TryParseSize(args[i], out rawDictionarySize))
             {
-                Console.Error.WriteLine("--dict requires a file path.");
+                Console.Error.WriteLine("--raw-dict requires a size, e.g. 8m or 512k.");
                 return 1;
             }
-            dictPath = args[i];
         }
         else if (args[i] == "--base")
         {
@@ -163,7 +185,7 @@ static int RunCompress(string[] args)
 
     if (inPath is null || (outPath is null && pairOutPath is null))
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--no-filters] [--dict <file>] [--base <base.nds>]");
+        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--no-filters] [--raw-dict <size>] [--base <base.nds>]");
         Console.Error.WriteLine("   or: ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>");
         return 1;
     }
@@ -189,7 +211,7 @@ static int RunCompress(string[] args)
 
     if (pairOutPath != null)
     {
-        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters);
+        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize);
         long baseSize = new FileInfo(basePath!).Length, targetSize = new FileInfo(inPath).Length;
         long containerSize = new FileInfo(pairOutPath).Length;
         double pairRatio = containerSize == 0 ? 0 : (double)(baseSize + targetSize) / containerSize;
@@ -197,12 +219,8 @@ static int RunCompress(string[] args)
         return 0;
     }
 
-    NdzDictionary? dictionary = dictPath is null
-        ? null
-        : new NdzDictionary { Content = File.ReadAllBytes(dictPath) };
-
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath!, (CompressionType)level, dictionary, blockSize, enableFilters, basePath);
+    NdzWriter.CompressFile(inPath, outPath!, (CompressionType)level, blockSize, enableFilters, basePath, rawDictionarySize);
     long compressedSize = new FileInfo(outPath!).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;

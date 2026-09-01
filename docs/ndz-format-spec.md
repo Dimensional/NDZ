@@ -232,14 +232,16 @@ block compression, both directions: `Nanook.GrindCore.ZStd.ZStdBlock` now reads
 0.8.1 (nuget.org, 2026-08-26); `src/Ndz.Core/Ndz.Core.csproj` now targets 0.9.0 (see
 "Dictionary window sizing" below for why).
 
-`Ndz.Core.Format.NdzDictionary` is real now, not a placeholder: `NdzWriter.Compress`
-takes one and uses it, `NdzArchive.Open` reads a file's dictionary section and applies
-it. Per-block behavior matches the reference packer's own architecture: every block is
-compressed both plain and dictionary-primed, whichever is smaller wins, tagged
-`BlockMode.Plain` or `BlockMode.Dict` accordingly (see `NdzWriter.CompressFrame`). The
-dictionary section is stored verbatim/uncompressed (`DictionaryStoredSize ==
-DictionaryDecompressedSize` always, for this writer) - a file claiming otherwise is
-rejected as an unsupported variant rather than misread.
+`NdzWriter.Compress`'s `rawDictionarySize` parameter (see
+`Compression.RawDictionaryBuilder`, and "Dictionary input: size-derived, not
+externally-supplied" below) drives it; `NdzArchive.Open` reads a file's dictionary
+section and applies it regardless of how it was built. Per-block behavior matches the
+reference packer's own architecture: every block is compressed both plain and
+dictionary-primed, whichever is smaller wins, tagged `BlockMode.Plain` or
+`BlockMode.Dict` accordingly (see `NdzWriter.CompressFrame`). The dictionary section is
+stored verbatim/uncompressed (`DictionaryStoredSize == DictionaryDecompressedSize`
+always, for this writer) - a file claiming otherwise is rejected as an unsupported
+variant rather than misread.
 
 The fix does **not** use `ZSTD_compress2()` - that was this doc's original guess at the
 mechanism, made before anyone had built the fix, and it guessed wrong. The mechanism
@@ -253,6 +255,44 @@ there's no dictID embedded either way, so there's no interop wrinkle from the AP
 
 The format author reached out to Nanook (GrindCore.net's maintainer) about the original
 blocker on 2026-08-22; Nanook landed the fix himself shortly after.
+
+### Dictionary input: size-derived, not externally-supplied — corrected 2026-08-31
+
+**A real, confirmed wrong turn, caught and fixed the same day.** From when dictionary
+support first landed (2026-08-25/26) until this correction, `NdzWriter.Compress` took a
+`dictionary: NdzDictionary?` parameter - arbitrary, externally-supplied dictionary bytes
+from wherever a caller got them (the CLI's `--dict <file>` read them from a file). This
+was never based on either reference implementation. Both `pack.rs` (`pack(nds: &[u8],
+raw_dict_size: usize, ...)`) and `ndztool.py` (`--raw-dict <size>`, `pack_ndz_blob(...,
+raw_dict_size=0, ...)`) only ever take a *target size* - the dictionary content itself is
+always **derived from the ROM being packed**, via content-defined chunking + dedup-value
+ranking (`dup_census`/`prefix_dict` in `pack.rs`, unavailable to us;
+`build_dup_weighted_dict`/`_cdc_chunks` in `ndztool.py`, which we do have and this is
+built against). Neither reference has ever had a way to load externally-supplied
+dictionary content at pack time.
+
+This wasn't a deliberate alternative design - it predates having either reference's real
+signature confirmed (dictionary support was built from a black-box WASM probe, before
+`pack.rs`'s `raw_dict_size: usize` was even read closely, and well before `ndztool.py`
+arrived and named the actual algorithm). It just never got reconciled against either
+once both were available, across three more features built on top of it. The *storage*
+format was never wrong - a dictionary section is always embedded verbatim in the `.ndz`
+regardless of how its content was chosen, and that was correct and cross-verified
+throughout. Only the *input* mechanism was invented.
+
+**Fixed**: `Ndz.Core.Format.NdzDictionary` removed. `NdzWriter.Compress`/`CompressFile`
+now take `rawDictionarySize: int` instead of a dictionary parameter, deriving the
+dictionary from `rom` itself via the new `Ndz.Core.Compression.RawDictionaryBuilder`
+(content-defined chunking + dedup-weighted ranking, confirmed byte-for-byte against
+`ndztool.py`'s `_cdc_chunks`/`build_dup_weighted_dict` run on identical input in an
+isolated venv - not just round-trip tested, the actual chunk boundaries and selected
+dictionary bytes are asserted equal). The CLI's `--dict <file>` became `--raw-dict
+<size>` (e.g. `8m`, `512k`), matching `ndztool.py`'s own flag shape exactly. Verified
+end-to-end against a real `ndztool.py --raw-dict` in both directions too: our derived-
+dictionary output decodes via `ndztool.py unpack --verify` sha256-identical to the
+source, a real `ndztool.py --raw-dict`-packed file decodes correctly through this CLI,
+and - on the same real ROM at the same target size - both implementations independently
+derived a dictionary of the exact same size (405,048 bytes), not just similar.
 
 ### Dictionary window sizing — fixed in GrindCore 0.9.0
 
@@ -361,9 +401,10 @@ gained an `enableFilters` parameter (default on) mirroring `ndztool.py`'s own
 
 ### Dictionary flag split — `RawDictionary` (live) vs. `Dict` (retired)
 
-`Ndz.Core.Format.NdzDictionary`/`RawDictionary` (bit 5) is the only dictionary mechanism
-`Ndz.Core` implements, matching `pack.rs` exactly - a raw content dictionary, stored
-verbatim, loaded directly. There is a second, separate flag: **`TrainedDictionary` = bit
+`RawDictionary` (bit 5, `Ndz.Core.Compression.RawDictionaryBuilder`) is the only
+dictionary mechanism `Ndz.Core` implements, matching `pack.rs` exactly - a raw content
+dictionary, derived from the ROM itself and stored verbatim. There is a second, separate
+flag: **`TrainedDictionary` = bit
 2, confirmed 2026-08-31** from `ndztool.py`'s own source (`NDZ_FLAG_DICT = 1 << 2 #
 trained dict, retired`) - wraps dictionary bytes in python-zstandard's
 `ZstdCompressionDict` object instead of loading them raw. Confirmed **retired**:

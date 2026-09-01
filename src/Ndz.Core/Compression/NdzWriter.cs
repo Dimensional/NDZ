@@ -1,7 +1,10 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using Nanook.GrindCore;
 using Nanook.GrindCore.ZStd;
 using Ndz.Core.Format;
+
+[assembly: InternalsVisibleTo("Ndz.Core.Tests")]
 
 namespace Ndz.Core.Compression;
 
@@ -57,7 +60,19 @@ public static class NdzWriter
     /// code, and an 8-byte BLAKE2b header hash, checked against whatever base is
     /// supplied at decode time.
     /// </param>
-    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null)
+    /// <param name="rawDictionarySize">
+    /// Target size (bytes) for a raw-content dictionary derived from <paramref name="rom"/>'s
+    /// own repeated content (<see cref="Compression.RawDictionaryBuilder"/>) - the *only*
+    /// way either reference implementation ever builds one (`pack.rs`'s own
+    /// `pack(nds, raw_dict_size: usize, ...)`, `ndztool.py`'s `--raw-dict &lt;size&gt;`);
+    /// there has never been a real "load an externally-supplied dictionary file" path in
+    /// either, and this port no longer pretends otherwise (an earlier version accepted
+    /// arbitrary external content here - removed 2026-08-31 once that was noticed).
+    /// 0 (the default) means no dictionary. If the ROM doesn't actually have 4 KiB worth
+    /// of useful duplicate content, no dictionary is stored even though this was
+    /// nonzero - matches `ndztool.py`'s own `if len(raw_dict) >= 4096` gate exactly.
+    /// </param>
+    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null, int rawDictionarySize = 0)
     {
         ArgumentNullException.ThrowIfNull(rom);
         ArgumentNullException.ThrowIfNull(output);
@@ -96,8 +111,19 @@ public static class NdzWriter
         // confirmed empirically against ndztool.py before this fix (see
         // docs/ndz-format-spec.md's "Per-block compression mode" / "Filter modes").
         NdzFlags flags = (NdzFlags.V2 | NdzFlags.ZStd | NdzFlags.Filters).WithBlockSize(blockSize);
-        if (dictionary != null)
-            flags |= NdzFlags.RawDictionary;
+
+        byte[]? dictionaryContent = null;
+        if (rawDictionarySize > 0)
+        {
+            byte[] derivedDictionary = RawDictionaryBuilder.Build(rom, rawDictionarySize);
+            // Matches ndztool.py's own `if len(raw_dict) >= 4096: ... else: raw_dict = b""`
+            // - not worth storing (or setting the flag for) a near-useless sliver.
+            if (derivedDictionary.Length >= 4096)
+            {
+                dictionaryContent = derivedDictionary;
+                flags |= NdzFlags.RawDictionary;
+            }
+        }
 
         BaseRomIndex? baseIndex = null;
         uint baseOriginalSize = 0, baseGameCode = 0;
@@ -121,8 +147,8 @@ public static class NdzWriter
             Banner = romInfo.Banner,
             Flags = flags,
             // The reference packer stores its dictionary uncompressed, so stored == decompressed.
-            DictionaryStoredSize = dictionary == null ? 0u : checked((uint)dictionary.Content.Length),
-            DictionaryDecompressedSize = dictionary == null ? 0u : checked((uint)dictionary.Content.Length),
+            DictionaryStoredSize = dictionaryContent == null ? 0u : checked((uint)dictionaryContent.Length),
+            DictionaryDecompressedSize = dictionaryContent == null ? 0u : checked((uint)dictionaryContent.Length),
             BaseOriginalSize = baseOriginalSize,
             BaseGameCode = baseGameCode,
             BaseHeaderHash = baseHeaderHash,
@@ -132,27 +158,27 @@ public static class NdzWriter
         frontMatter.WriteTo(frontMatterBytes);
         output.Write(frontMatterBytes);
 
-        if (dictionary != null)
-            output.Write(dictionary.Content);
+        if (dictionaryContent != null)
+            output.Write(dictionaryContent);
 
         int frameCount = rom.Length == 0 ? 0 : (rom.Length + NdzConstants.FrameSize - 1) / NdzConstants.FrameSize;
         var frames = new byte[frameCount][];
         var seekTable = new SeekTableEntry[frameCount];
         var plainOptions = new CompressionOptions { Type = level, BlockSize = blockSize };
-        var dictOptions = dictionary == null
+        var dictOptions = dictionaryContent == null
             ? null
             : new CompressionOptions
             {
                 Type = level,
                 BlockSize = blockSize,
-                InitProperties = dictionary.Content,
+                InitProperties = dictionaryContent,
                 // Forces the CDict's window to cover the whole dictionary + a block, matching
                 // the reference packer's own wlog(dict.len() + BLOCK).max(15) exactly (GrindCore
                 // 0.9.0+). Without this, ZSTD_createCDict()'s implicit sizing caps the window at
                 // 8 MB for any dictionary over 256 KB at level 19 and never grows further,
                 // silently losing match material beyond that for larger dictionaries - see
                 // docs/ndz-format-spec.md's "Dictionary window sizing" section.
-                Dictionary = new CompressionDictionaryOptions { WindowBits = ComputeDictionaryWindowBits(dictionary.Content.Length, blockSize) },
+                Dictionary = new CompressionDictionaryOptions { WindowBits = ComputeDictionaryWindowBits(dictionaryContent.Length, blockSize) },
             };
 
         Parallel.For(0, frameCount,
@@ -176,12 +202,12 @@ public static class NdzWriter
         WriteTrailer(output, seekTable);
     }
 
-    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null)
+    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null, int rawDictionarySize = 0)
     {
         byte[] rom = File.ReadAllBytes(inputNdsPath);
         byte[]? baseRom = baseRomPath == null ? null : File.ReadAllBytes(baseRomPath);
         using var output = File.Create(outputNdzPath);
-        Compress(rom, output, level, dictionary, blockSize, enableFilters, baseRom);
+        Compress(rom, output, level, blockSize, enableFilters, baseRom, rawDictionarySize);
     }
 
     /// <summary>
@@ -189,9 +215,17 @@ public static class NdzWriter
     /// compressor can reference any byte of the dictionary as match material - mirrors
     /// the reference packer's <c>wlog(dict.len() + BLOCK).max(15)</c> exactly. Clamped to
     /// GrindCore's own accepted range [10, 31] (it clamps internally too, but computing
-    /// a value already in range avoids relying on that).
+    /// a value already in range avoids relying on that). Internal (not private) so
+    /// <c>DictionaryWindowSizingTests</c> can check the arithmetic directly for
+    /// dictionary sizes past the old 8 MiB ceiling, without needing to actually
+    /// construct that much genuinely-duplicate ROM content through the public,
+    /// size-only <see cref="RawDictionaryBuilder"/> API (only one representative copy
+    /// of each unique repeated chunk is ever included, so reaching 8+ MiB of *derived*
+    /// dictionary content for real would need hundreds of distinct duplicate chunks -
+    /// impractical to engineer reliably in a test, whereas this calculation itself
+    /// takes only a length).
     /// </summary>
-    private static int ComputeDictionaryWindowBits(int dictionaryLength, int blockSize)
+    internal static int ComputeDictionaryWindowBits(int dictionaryLength, int blockSize)
     {
         long n = (long)dictionaryLength + blockSize;
         int bits = n <= 1 ? 0 : System.Numerics.BitOperations.Log2((ulong)(n - 1)) + 1;
