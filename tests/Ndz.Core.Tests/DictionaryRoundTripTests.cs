@@ -4,11 +4,11 @@ using Ndz.Core.Format;
 namespace Ndz.Core.Tests;
 
 /// <summary>
-/// Real dictionary compression, now that GrindCore.net's local dev build supports it
-/// (see NdzDictionary's remarks). Mirrors the reference packer's own motivating case:
-/// a raw content dictionary built from the ROM's own repeated content, helping blocks
-/// that share content with each other but are too far apart for a per-block-blind
-/// plain compressor to see.
+/// Real dictionary compression, on GrindCore's official 0.9.0 NuGet release (see
+/// NdzDictionary's remarks). Mirrors the reference packer's own motivating case: a raw
+/// content dictionary built from the ROM's own repeated content, helping blocks that
+/// share content with each other but are too far apart for a per-block-blind plain
+/// compressor to see.
 /// </summary>
 public class DictionaryRoundTripTests
 {

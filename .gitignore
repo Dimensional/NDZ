@@ -4,10 +4,10 @@ obj/
 *.user
 *.suo
 
-## Rust (reference/ndz-reference - scratch crate for inspecting the zstd crate's API)
+## Rust (in case a Cargo scratch project is ever added back under reference/)
 target/
 
-## Python (reference/mena-patchbench - ndztool.py/ndzunpack.py)
+## Python (reference/mena-patchbench/ndztool.py)
 __pycache__/
 *.pyc
 .venv/

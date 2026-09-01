@@ -88,6 +88,18 @@ public sealed class NdzFrontMatter
         var flags = (NdzFlags)BinaryPrimitives.ReadUInt32LittleEndian(source[0x000C..]);
         if (flags.HasFlag(NdzFlags.BasePatch))
             throw new NotSupportedException("This .ndz uses base-ROM patch mode (flags bit 4), which is not implemented yet.");
+        if (flags.HasFlag(NdzFlags.TrainedDictionary))
+        {
+            // Explicit, named check rather than relying on NdzArchive.Open's incidental
+            // "stored size != decompressed size" inference: a trained-dict section isn't
+            // guaranteed to trip that check (it has no such invariant of its own), and
+            // even if the sizes happened to match, blindly loading a trained-dict blob as
+            // raw content would silently produce garbage rather than fail loudly.
+            throw new NotSupportedException(
+                "This .ndz uses a trained dictionary section (flags bit 2, NDZ_FLAG_DICT), " +
+                "which is retired in the real format and not implemented here - only the raw " +
+                "content dictionary (flags bit 5, RawDictionary) is supported.");
+        }
 
         return new NdzFrontMatter
         {

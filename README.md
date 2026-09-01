@@ -22,14 +22,27 @@ and the pair-container format for shipping a base+patch pair together.
 ## Usage
 
 ```
-ndz compress <in.nds> <out.ndz> [--level 1-22] [--dict <file>]
+ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--dict <file>]
                                                   Compress a decrypted .nds into .ndz.
                                                   --dict primes compression with a raw
-                                                  content dictionary.
+                                                  content dictionary. --level and
+                                                  --block-size (default 8192, power of
+                                                  two) are capped at the target
+                                                  hardware's decode-speed limits - see
+                                                  "Hardware limits" below.
 ndz decompress <in.ndz> <out.nds>                Reconstruct the original .nds.
 ndz info <in.ndz>                                Print front-matter and seek-table summary.
 ndz verify <in.ndz> <in.nds>                     Decompress and byte-compare against the original.
 ```
+
+### Hardware limits
+
+Compression level (max 19) and block size (max 8192 bytes) are capped, not just
+defaulted: the real target hardware (DSPico) decodes on the fly while the console
+waits on a cart read, so a higher level or a bigger block would produce a file that
+packs fine and then fails - or stalls - on real hardware. `NdzWriter.Compress` throws
+rather than silently accept either past its limit, matching `ndztool.py`'s own refusal
+(`NDZ_MAX_LEVEL`/`NDZ_MAX_BLOCK_SIZE`).
 
 ROMs should be decrypted first — NDZ compresses raw bytes as-is and does no
 cryptographic work of its own.

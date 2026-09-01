@@ -65,4 +65,20 @@ public class NdsRomInfoTests
 
         Assert.Throws<InvalidDataException>(() => NdsRomInfo.FromRom(rom));
     }
+
+    /// <summary>
+    /// Confirmed against `ndztool.py`'s `build_ndz_frontmatter`: it reads the banner's
+    /// own 2-byte version field unconditionally (`struct.unpack("&lt;H", ...)`), which
+    /// hard-crashes if fewer than 2 bytes remain - a ROM whose bannerOffset leaves room
+    /// for only 1 more byte is exactly as invalid as one with no banner at all.
+    /// </summary>
+    [Fact]
+    public void FromRom_ThrowsWhenBannerOffsetLeavesNoRoomForVersionField()
+    {
+        byte[] rom = TestRom.Build(0x200 + 0x1000);
+        uint bannerOffset = (uint)rom.Length - 1;
+        BitConverter.GetBytes(bannerOffset).CopyTo(rom, 0x68);
+
+        Assert.Throws<InvalidDataException>(() => NdsRomInfo.FromRom(rom));
+    }
 }

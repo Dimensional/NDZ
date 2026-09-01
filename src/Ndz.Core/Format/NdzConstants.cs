@@ -68,16 +68,38 @@ public static class NdzConstants
     public const int FrameSize = 128 * 1024;
 
     /// <summary>
-    /// The inner unit each frame is subdivided into: 8 KiB, independently
-    /// zstd-compressed with its own per-block compression-mode byte. A frame's payload
-    /// is privately structured as
-    /// <c>[u32 csize × nblocks][u8 mode × nblocks][compressed block bytes, concatenated]</c>
-    /// - this inner structure is invisible to the outer seek table, which only ever
-    /// records whole-frame (csize, dsize). Confirmed against the reference packer's
-    /// `BLOCK` constant. Also embedded (as log2) into the front-matter's flags field -
-    /// see <see cref="NdzFlagsExtensions.GetBlockSizeLog2"/>.
+    /// The default inner unit each frame is subdivided into: 8 KiB, independently
+    /// zstd-compressed with its own per-block compressed size (and, when
+    /// <see cref="NdzFlags.Filters"/> is set - always, for this writer - a per-block
+    /// compression-mode byte too). A frame's payload is privately structured as
+    /// <c>[u32 csize × nblocks][u8 mode × nblocks if Filters][compressed block bytes,
+    /// concatenated]</c> - this inner structure is invisible to the outer seek table,
+    /// which only ever records whole-frame (csize, dsize). Confirmed against the
+    /// reference packer's `BLOCK` constant and `ndztool.py`'s own default (its
+    /// `--block-size` defaults to `8k`, though it - unlike `pack.rs` - allows other
+    /// values up to <see cref="MaxBlockSize"/>). Also embedded (as log2) into the
+    /// front-matter's flags field - see <see cref="NdzFlagsExtensions.GetBlockSizeLog2"/>.
     /// </summary>
     public const int BlockSize = 8192;
+
+    /// <summary>
+    /// Hardware ceiling, not a preference: confirmed via `ndztool.py`'s own
+    /// `NDZ_MAX_BLOCK_SIZE` and its doc comment - the real target hardware (DSPico)
+    /// decodes on the fly while the console waits on a cart read, and a block bigger
+    /// than this takes too long to fetch AND decompress on a cache miss, freezing the
+    /// console. `ndztool.py` refuses to pack past this rather than produce a file that
+    /// "packs fine and then fails on real hardware" - <see cref="Compression.NdzWriter"/>
+    /// matches that refusal.
+    /// </summary>
+    public const int MaxBlockSize = 8192;
+
+    /// <summary>
+    /// Hardware ceiling, not a preference: confirmed via `ndztool.py`'s own
+    /// `NDZ_MAX_LEVEL` and its doc comment - decompression above this zstd level is too
+    /// slow for the DSPico to keep up with a cart read. Same refuse-rather-than-ship-a-
+    /// broken-file reasoning as <see cref="MaxBlockSize"/>.
+    /// </summary>
+    public const int MaxLevel = 19;
 
     /// <summary>Size in bytes of one outer (frame-level) seek-table entry: u32 csize + u32 dsize.</summary>
     public const int SeekTableEntrySize = 8;

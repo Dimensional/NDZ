@@ -3,9 +3,11 @@
 Status: v1 implemented and round-trip tested (`src/Ndz.Core`, `src/Ndz.Cli`). Corrected
 against the format author's own reference packer (a Rust implementation, `pack.rs`) on
 2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Corrections
-from the reference packer" below for exactly what changed and why. Base-ROM patch mode
-(flags bit 4), the dictionary section, and non-`Plain` per-block compression modes are
-all **deferred** — see "Open questions."
+from the reference packer" below for exactly what changed and why. Compression,
+random-access decompression, and the raw-content dictionary (flags bit 5) are
+implemented. Base-ROM patch mode (flags bit 4), the retired trained-dictionary variant
+(flags bit 2), the pair-container format, and the five filter per-block compression
+modes are all **deferred** — see "Open questions."
 
 ## Container layout
 
@@ -97,12 +99,12 @@ packer: it is not simply a set of independent boolean flags.
 |---|---|
 | 0 | `V2` — set on every file the reference packer writes; exact meaning ("format v2"?) not otherwise documented |
 | 1 | `ZStd` — the block codec is ZStd |
-| 2 | `Dict` — a *trained* dictionary (python-zstandard `ZstdCompressionDict`), distinct from `RawDictionary`/bit 5 — confirmed 2026-08-31 (`ndztool.py`'s `NDZ_FLAG_DICT`), and confirmed **retired**: the real packer never actually produces it, only reads it if encountered. Not implemented here (no trained-dict path exists in `Ndz.Core`). |
+| 2 | `TrainedDictionary` — a *trained* dictionary (python-zstandard `ZstdCompressionDict`), distinct from `RawDictionary`/bit 5 — confirmed 2026-08-31 (`ndztool.py`'s `NDZ_FLAG_DICT`), and confirmed **retired**: the real packer never actually produces it, only reads it if encountered. Not implemented here: `NdzFrontMatter.Read` throws `NotSupportedException` if it's set, the same as `BasePatch`, rather than risking a silent misread as raw content. |
 | 3 | `Filters` — **not really about filter transforms specifically**: this bit gates whether a per-block mode array exists in each frame at all. Without it, every block in a frame is uniformly `Dict` (if a dictionary is present) or `Plain` (if not) — no per-block byte to read. `NdzWriter` always writes a mode array (even when every block is Plain/Dict, no real filter transform involved) and so must always set this bit — confirmed empirically 2026-08-31 by cross-testing against `ndztool.py`'s real decoder in both directions; see "Per-block compression mode" below. |
 | 4 | `BasePatch` — this file's frames encode a patch against a base `.nds` (previously the only bit this spec documented) |
 | 5 | `RawDictionary` — a raw, self-referential content-dictionary section follows the front-matter |
 | 6–7 | never set by the reference packer — reserved/unknown |
-| 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against both `ndzunpack.py`'s and `ndztool.py`'s own decode logic (see "Reference materials"; we have those scripts, not the `patchbench.py` module they both defer the real format definition to). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's exact width beyond "starts at bit 8" still isn't confirmed by any observed value; the implementation reads a generous 8-bit window. |
+| 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against `ndztool.py`'s own decode logic (see "Reference materials"; we have that script, not the `patchbench.py` module it defers the real format definition to). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's width is confirmed exactly 8 bits (bits 8-15) by `ndztool.py`'s own `describe_flags`, which computes `(flags >> 8) & 0xFF`. |
 
 Do not repurpose any undefined bit speculatively - reserved bits stay zero pending the
 format author's confirmation of their meaning.
@@ -117,8 +119,9 @@ which would have misparsed any file using a different size), and `NdzWriter.Comp
 now takes an optional `blockSize` parameter to produce one. See
 `NonDefaultBlockSizeTests.cs`.
 
-**Bit 4 is read-but-rejected, not implemented**: `NdzFrontMatter.Read` throws
-`NotSupportedException` if it's set, and `NdzWriter` never sets it. See "Open questions."
+**Bits 2 and 4 are read-but-rejected, not implemented**: `NdzFrontMatter.Read` throws
+`NotSupportedException` if either is set, and `NdzWriter` never sets either. See "Open
+questions."
 
 ### Per-block compression mode (`BlockMode`)
 
@@ -165,9 +168,11 @@ See `NonDefaultBlockSizeTests.cs`-style coverage in `BlockModeTests.cs`
 ## Compression
 
 `Ndz.Core.Compression.NdzWriter.Compress` — for each 128 KiB frame, splits it into up to
-sixteen 8 KiB blocks (the last block of the last frame may be shorter) and compresses
-each independently via `ZStdBlock` with `CompressionOptions { Type = <level>, BlockSize
-= 8192 }`. If a dictionary was supplied, every block is compressed *both* plain and
+sixteen 8 KiB blocks by default (the last block of the last frame may be shorter; block
+size is a `blockSize` parameter, any power of two up to the hardware ceiling of 8192 -
+see "Hardware limits" below) and compresses each independently via `ZStdBlock` with
+`CompressionOptions { Type = <level>, BlockSize = blockSize }`. If a dictionary was
+supplied, every block is compressed *both* plain and
 dictionary-primed (`InitProperties = dictionary.Content`), and whichever is smaller
 wins - tagged `BlockMode.Plain` or `BlockMode.Dict` accordingly; with no dictionary,
 every block is just `BlockMode.Plain`. Writes `[csizes][modes][compressed bytes]` as
@@ -188,6 +193,24 @@ once, precomputes cumulative compressed-byte offsets per frame, then serves
 frame, parsing its private block header to decompress only the block(s) actually needed
 - with a 1-frame cache for sequential reads. `DecompressAll()` is just `ReadAt(0,
 wholeBuffer)`.
+
+## Hardware limits
+
+Confirmed 2026-08-31 via `ndztool.py`'s own `NDZ_MAX_LEVEL`/`NDZ_MAX_BLOCK_SIZE` and their
+doc comment: the real target hardware (DSPico) decodes on the fly while the console
+waits on a cart read, so two knobs are **hardware ceilings, not preferences** -
+
+- compression level: max **19** (`NdzConstants.MaxLevel`) - higher decompresses too
+  slowly for the console to keep up.
+- block size: max **8192 bytes** (`NdzConstants.MaxBlockSize`) - a bigger block takes
+  too long to fetch *and* decompress on a cache miss and the console freezes.
+
+`ndztool.py` refuses to pack past either rather than produce a file that "packs fine and
+then fails on real hardware" - `NdzWriter.Compress` throws `ArgumentOutOfRangeException`
+for the same reason, and `Ndz.Cli`'s `compress` command validates both up front too (a
+clean usage error instead of an exception bubbling out of the library). See
+`NonDefaultBlockSizeTests.cs`'s `RejectsBlockSizeAboveTheHardwareLimit`/
+`RejectsCompressionLevelAboveTheHardwareLimit`.
 
 ## Open questions (deferred, not guessed at)
 
@@ -290,8 +313,8 @@ Confirmed real and in active use since 2026-08-25 (mode values 2-6 observed on r
 ROMs, independent of dictionary use). On 2026-08-31 Mena shared, through the user, her
 own Claude session's explanation of `patchbench.py`'s filter modes, then later the same
 day a working self-contained pack+unpack tool (`ndztool.py`) built against it — see
-`reference/mena-patchbench/` (`ndztool.py`, `ndzunpack.py`, `filter-modes-explanation.md`,
-and that folder's README for full provenance and cross-checking notes). All 7 mode
+`reference/mena-patchbench/` (`ndztool.py`, `filter-modes-explanation.md`, and that
+folder's README for full provenance and cross-checking notes). All 7 mode
 values are now named, confirmed in `ndztool.py`'s own source
 (`_FILTER_FWD`/`_FILTER_INV`, `MODE_NAMES`):
 
@@ -306,10 +329,18 @@ Delta targets slowly-varying 16/32-bit sequences (coordinates, pointers, audio s
 — turns them into runs of near-zeros. Shuffle groups all the byte-0s together, then all
 the byte-1s, etc., separating a pointer array's often-identical high bytes from its
 noisier low bytes. Both just hand the compressor longer matches; neither shrinks
-anything by itself. Selection is brute force: every *full*, power-of-two-length block
-tries plain, dict, and each filter, and whichever compresses smallest wins — a frame's
-final, possibly-short trailing block is always `Plain` or `Dict`. Reported gain from
-filters alone: ~3.5%, for one extra stored byte per block.
+anything by itself. Selection is brute force: every block is tried plain (and
+dictionary-primed, if a dictionary is active); a block is additionally tried through
+each filter only if it's a **full** block, i.e. exactly the configured block size
+(`len(blk) == block_dsize` in `ndztool.py`, not merely "some power-of-two length" - a
+frame's final, possibly-short trailing block never qualifies for a filter even if its
+length happens to itself be a power of two) — whichever result compresses smallest wins.
+Reported gain from filters alone: ~3.5%, for one extra stored byte per block.
+
+In base-patch mode, a winning base-window match is tagged `Plain` (mode 1), not a
+distinct mode value — `compress_block_best` records the win via the separate `baseOff`
+array instead (see "Base-ROM patch mode" below), so the mode byte alone can't
+distinguish a base-window hit from an ordinary plain block.
 
 **Still not implemented in `Ndz.Core`** - only the enum values/meanings are confirmed,
 not the encode/decode transform logic (see `BlockMode`'s own doc comment). `NdzArchive`
@@ -322,13 +353,17 @@ filter-mode block, then fails there cleanly, exactly as designed.
 
 `Ndz.Core.Format.NdzDictionary`/`RawDictionary` (bit 5) is the only dictionary mechanism
 `Ndz.Core` implements, matching `pack.rs` exactly - a raw content dictionary, stored
-verbatim, loaded directly. There is a second, separate flag: **`Dict` = bit 2,
-confirmed 2026-08-31** from `ndztool.py`'s own source (`NDZ_FLAG_DICT = 1 << 2 # trained
-dict, retired`) - wraps dictionary bytes in python-zstandard's `ZstdCompressionDict`
-object instead of loading them raw. Confirmed **retired**: `ndztool.py`'s own packer
-(`pack_ndz_blob`) never actually produces it - the parameter that would enable it is
-always `None`. Not implemented here, and not worth implementing unless a real file using
-it ever surfaces - the live path is `RawDictionary`.
+verbatim, loaded directly. There is a second, separate flag: **`TrainedDictionary` = bit
+2, confirmed 2026-08-31** from `ndztool.py`'s own source (`NDZ_FLAG_DICT = 1 << 2 #
+trained dict, retired`) - wraps dictionary bytes in python-zstandard's
+`ZstdCompressionDict` object instead of loading them raw. Confirmed **retired**:
+`ndztool.py`'s own packer (`pack_ndz_blob`) never actually produces it - the parameter
+that would enable it is always `None`. Not implemented here, and not worth implementing
+unless a real file using it ever surfaces - the live path is `RawDictionary`.
+`NdzFrontMatter.Read` throws `NotSupportedException` if it's ever encountered set,
+rather than risk misreading a trained-dict blob as raw content on the (currently
+impossible, since nothing produces this bit) chance its stored/decompressed sizes
+happened to match.
 
 ### Pair container format — encode side now fully specified, still unimplemented here
 
@@ -377,18 +412,20 @@ require the unimplemented behavior rather than mishandling it.
 - `reference/mena-packer/pack.rs` - a verbatim copy of the format author's (Mena Azer)
   own reference packer. The ground truth this port was corrected against; see its
   README for what it needs (the `census`/`filters` modules) that we don't have yet.
-- `reference/mena-patchbench/` - two Python scripts shared 2026-08-31, both explicitly
-  described (in their own docstrings) as duplicating `patchbench.py`'s logic rather than
-  being that module itself, which we still don't have:
-  - `ndzunpack.py` - decode-only, imports a `patchbench` module we don't have (not
-    runnable standalone).
+- `reference/mena-patchbench/` - shared 2026-08-31, explicitly described (in its own
+  docstring) as duplicating `patchbench.py`'s logic rather than being that module
+  itself, which we still don't have:
   - `ndztool.py` - a complete, **self-contained** pack + unpack tool, no local imports,
-    just `pip install -r requirements.txt` (`zstandard`, optionally `lz4`). This is by
-    far the strongest reference material available - real, runnable code covering both
-    encode and decode, including base-patch and the pair container. Cross-checked
-    line-by-line against `pack.rs` and tested empirically (real venv, real ROMs, both
-    read and write directions) before anything here was built against it - see that
-    folder's README for what's cross-validated vs. `ndztool.py`-only.
-- `reference/ndz-reference/` - a minimal Rust project pulling the same `zstd`/`rayon`
-  crates that reference packer uses, kept around for inspecting the real `zstd` crate's
-  dictionary API (`zstd-0.13.3/src/bulk/{compressor,decompressor}.rs`) against GrindCore.
+    just `pip install -r requirements.txt` (`zstandard`, optionally `lz4`). By far the
+    strongest reference material available - real, runnable code covering both encode
+    and decode, including base-patch and the pair container. Cross-checked line-by-line
+    against `pack.rs` and tested empirically (real venv, real ROMs, both read and write
+    directions) before anything here was built against it - see that folder's README.
+  - `filter-modes-explanation.md` - a transcription of a screenshot (Mena's own Claude
+    session describing `patchbench.py`'s filter modes) that first named the five filter
+    modes, before `ndztool.py` arrived and confirmed the same names directly in code.
+  - An earlier decode-only script, `ndzunpack.py`, and a scratch Rust project,
+    `reference/ndz-reference/` (kept only for inspecting the `zstd` crate's dictionary
+    API against GrindCore's), were both removed 2026-08-31 as redundant once `ndztool.py`
+    arrived and independently confirmed everything either one had shown - see git
+    history if either is ever needed again.

@@ -44,16 +44,23 @@ static int Run(string[] args)
 
 static void PrintUsage()
 {
-    Console.WriteLine("""
+    Console.WriteLine($"""
         ndz - NDS ROM <-> seekable-zstd .ndz converter
 
         Usage:
-          ndz compress <in.nds> <out.ndz> [--level 1-22] [--dict <file>]
+          ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N] [--dict <file>]
                                                              Compress a decrypted .nds into .ndz.
-                                                             --level defaults to 19. --dict primes
-                                                             compression with a raw content dictionary
-                                                             (its bytes are stored verbatim in the
-                                                             output too).
+                                                             --level defaults to 19 and cannot exceed
+                                                             {NdzConstants.MaxLevel} - a hardware limit of the
+                                                             target decoder, not a preference (higher
+                                                             levels decompress too slowly). --block-size
+                                                             defaults to {NdzConstants.BlockSize} bytes, must be a power
+                                                             of two, and cannot exceed {NdzConstants.MaxBlockSize} - also a
+                                                             hardware limit (bigger blocks take too long
+                                                             to fetch and decompress on a cache miss).
+                                                             --dict primes compression with a raw content
+                                                             dictionary (its bytes are stored verbatim in
+                                                             the output too).
           ndz decompress <in.ndz> <out.nds>                 Reconstruct the original .nds.
           ndz info <in.ndz>                                 Print front-matter and seek-table summary.
           ndz verify <in.ndz> <in.nds>                       Decompress and byte-compare against the
@@ -72,6 +79,7 @@ static int RunCompress(string[] args)
 {
     string? inPath = null, outPath = null, dictPath = null;
     int level = 19;
+    int blockSize = NdzConstants.BlockSize;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -79,7 +87,15 @@ static int RunCompress(string[] args)
         {
             if (++i >= args.Length || !int.TryParse(args[i], out level))
             {
-                Console.Error.WriteLine("--level requires an integer value (1-22).");
+                Console.Error.WriteLine($"--level requires an integer value (1-{NdzConstants.MaxLevel}).");
+                return 1;
+            }
+        }
+        else if (args[i] == "--block-size")
+        {
+            if (++i >= args.Length || !int.TryParse(args[i], out blockSize))
+            {
+                Console.Error.WriteLine($"--block-size requires an integer value in bytes (power of two, up to {NdzConstants.MaxBlockSize}).");
                 return 1;
             }
         }
@@ -103,13 +119,21 @@ static int RunCompress(string[] args)
 
     if (inPath is null || outPath is null)
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-22] [--dict <file>]");
+        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--dict <file>]");
         return 1;
     }
 
-    if (level < 1 || level > 22)
+    // Hardware limits, not preferences - see NdzConstants.MaxLevel/MaxBlockSize's
+    // remarks. Checked here too (not just inside NdzWriter) so a bad --level/--block-size
+    // is reported as a normal usage error, not an internal exception.
+    if (level < 1 || level > NdzConstants.MaxLevel)
     {
-        Console.Error.WriteLine("--level must be between 1 and 22.");
+        Console.Error.WriteLine($"--level must be between 1 and {NdzConstants.MaxLevel} (higher levels decompress too slowly for the target hardware).");
+        return 1;
+    }
+    if (blockSize <= 0 || (blockSize & (blockSize - 1)) != 0 || blockSize > NdzConstants.MaxBlockSize)
+    {
+        Console.Error.WriteLine($"--block-size must be a power of two up to {NdzConstants.MaxBlockSize} (bigger blocks take too long to fetch/decompress on the target hardware).");
         return 1;
     }
 
@@ -118,7 +142,7 @@ static int RunCompress(string[] args)
         : new NdzDictionary { Content = File.ReadAllBytes(dictPath) };
 
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary);
+    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary, blockSize);
     long compressedSize = new FileInfo(outPath).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;

@@ -39,11 +39,17 @@ public sealed class NdsRomInfo
         if (bannerOffset == 0 || bannerOffset >= (uint)rom.Length)
             throw new InvalidDataException($"Invalid bannerOffset 0x{bannerOffset:X} in .nds header - must be nonzero and within the ROM ({rom.Length:N0} bytes).");
 
+        // The banner's own version field is a u16 read unconditionally at bannerOffset
+        // by both reference implementations (`nds_data[banner_offset:banner_offset+2]`
+        // unpacked as "<H" in ndztool.py, which hard-crashes via struct.error if fewer
+        // than 2 bytes remain) - not defaulted past. A ROM 1 byte short of a full version
+        // field is exactly as invalid as one with no banner at all.
+        if (bannerOffset + 2 > (uint)rom.Length)
+            throw new InvalidDataException($"Banner offset 0x{bannerOffset:X} leaves no room for the banner's own 2-byte version field in a {rom.Length:N0}-byte ROM.");
+
         var banner = new byte[NdzConstants.BannerSlotLength];
 
-        ushort bannerVersion = bannerOffset + 2 <= (uint)rom.Length
-            ? BinaryPrimitives.ReadUInt16LittleEndian(rom.Slice((int)bannerOffset, 2))
-            : (ushort)0;
+        ushort bannerVersion = BinaryPrimitives.ReadUInt16LittleEndian(rom.Slice((int)bannerOffset, 2));
 
         int bannerContentSize = NdzConstants.GetBannerContentSize(bannerVersion);
         int available = (int)Math.Min(bannerContentSize, rom.Length - (long)bannerOffset);

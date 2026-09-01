@@ -39,6 +39,25 @@ public static class NdzWriter
             throw new ArgumentException("Output stream must be writable.", nameof(output));
         if (blockSize <= 0 || (blockSize & (blockSize - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(blockSize), blockSize, "Block size must be a positive power of two.");
+        // Hardware ceilings, not preferences - see NdzConstants.MaxBlockSize/MaxLevel's
+        // remarks. ndztool.py refuses to pack past either rather than silently produce a
+        // file that "packs fine and then fails on real hardware"; matched here. The level
+        // check only applies to zstd's own numeric levels (0-22) - GrindCore's
+        // CompressionType also has negative meta-values (Fastest/Optimal/SmallestSize/
+        // Decompress) with codec-dependent interpretations this project has no reference
+        // behavior for, so they pass through unchecked rather than guessed at.
+        if (blockSize > NdzConstants.MaxBlockSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blockSize), blockSize,
+                $"Block size exceeds the hardware limit of {NdzConstants.MaxBlockSize} bytes - " +
+                "bigger blocks take too long to fetch and decompress on a cache miss and the console freezes.");
+        }
+        if ((int)level > NdzConstants.MaxLevel)
+        {
+            throw new ArgumentOutOfRangeException(nameof(level), level,
+                $"Compression level exceeds the hardware limit of {NdzConstants.MaxLevel} - " +
+                "higher levels decompress too slowly for the console to keep up.");
+        }
 
         var romInfo = NdsRomInfo.FromRom(rom);
         // Filters must be set whenever a per-block mode array is written, which is

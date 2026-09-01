@@ -1,9 +1,8 @@
 # mena-patchbench
 
-Two Python scripts here, both shared by the user 2026-08-31, relayed from Mena Azer
-(mena@phenommod.com, the NDZ format's author), both per the user built by Mena's own
-Claude session against her real internal `patchbench.py` module - the second and third
-real artifacts from her, after
+Shared by the user 2026-08-31, relayed from Mena Azer (mena@phenommod.com, the NDZ
+format's author), built by Mena's own Claude session against her real internal
+`patchbench.py` module - real artifacts from her, after
 [`reference/mena-packer/pack.rs`](../mena-packer/pack.rs).
 
 - **`ndztool.py`** (arrived later the same day) - a complete, **self-contained**
@@ -12,16 +11,18 @@ real artifacts from her, after
   logic is duplicated from `patchbench.py`, which remains the reference implementation."
   This is by far the strongest reference material available for this port - real,
   runnable code covering both encode and decode, including base-patch and the pair
-  container, not just a description of them.
-- **`ndzunpack.py`** (arrived first) - decode-only, `import patchbench as pb` at the
-  top pulls in the actual module, which we don't have - not runnable standalone (same
-  situation as `pack.rs`'s missing `census`/`filters` modules, see that folder's
-  README). Superseded by `ndztool.py` for anything both scripts cover, but kept since it
-  was the first source for some of this.
+  container, not just a description of them. Kept as one of the two confirmed sources
+  for this project, alongside `pack.rs`.
 - **`filter-modes-explanation.md`** - a transcription of the same Claude session's own
   explanation of the filter modes (a screenshot the user shared), including citations
   into `patchbench.py` and a previously-unknown C++ firmware decoder,
-  `ntrCardRomNdz.cpp` - neither file itself is available to us.
+  `ntrCardRomNdz.cpp` - neither file itself is available to us. Kept as corroborating
+  (but secondhand, screenshot-derived) material; `ndztool.py`'s own code is the primary
+  citation wherever both agree.
+- **`ndzunpack.py`** (arrived first; decode-only, `import patchbench as pb` at the top
+  pulled in the actual module, which we don't have) was **removed 2026-08-31** as
+  redundant once `ndztool.py` arrived and independently confirmed everything it had
+  shown - see git history if it's ever needed again.
 
 **We still do not have `patchbench.py` itself** - both scripts are explicit in their own
 docstrings that they duplicate its logic rather than being that module. Everything below

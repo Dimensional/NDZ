@@ -17,10 +17,10 @@ public class NdzFlagsExtensionsTests
     }
 
     /// <summary>
-    /// Confirmed against `ndzunpack.py`'s own decode logic (reference/mena-patchbench -
-    /// we have that script, not the `patchbench.py` module it imports): a log2 subfield
-    /// of exactly 0 is a sentinel for "unspecified - default to 4096", not a literal
-    /// "1 &lt;&lt; 0 = 1 byte" block size. That means <c>WithBlockSize(1)</c> does not
+    /// Confirmed against `ndztool.py`'s own decode logic (reference/mena-patchbench -
+    /// we have that script, not the `patchbench.py` module it defers to): a log2
+    /// subfield of exactly 0 is a sentinel for "unspecified - default to 4096", not a
+    /// literal "1 &lt;&lt; 0 = 1 byte" block size. That means <c>WithBlockSize(1)</c> does not
     /// round-trip through <see cref="NdzFlagsExtensions.GetBlockSize"/> - a real 1-byte
     /// block size isn't representable, which is fine since nothing would realistically
     /// use one.

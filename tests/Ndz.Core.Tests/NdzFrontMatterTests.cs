@@ -81,6 +81,22 @@ public class NdzFrontMatterTests
     }
 
     [Fact]
+    public void Read_RejectsTrainedDictionaryFlag_NotImplemented()
+    {
+        var sample = new NdzFrontMatter
+        {
+            OriginalSize = 1,
+            GameCode = 0,
+            Banner = new byte[NdzConstants.BannerSlotLength],
+            Flags = NdzFlags.TrainedDictionary,
+        };
+        var buffer = new byte[NdzConstants.FrontMatterSize];
+        sample.WriteTo(buffer);
+
+        Assert.Throws<NotSupportedException>(() => NdzFrontMatter.Read(buffer));
+    }
+
+    [Fact]
     public void WriteTo_RejectsWrongDestinationLength()
     {
         Assert.Throws<ArgumentException>(() => MakeSample().WriteTo(new byte[NdzConstants.FrontMatterSize - 1]));

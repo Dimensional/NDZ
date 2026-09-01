@@ -45,9 +45,9 @@ public sealed class NdzArchive : IDisposable
         FrontMatter = frontMatter;
         SeekTable = seekTable;
         // Read from the file's own flags rather than assuming NdzConstants.BlockSize:
-        // that constant is only what NdzWriter always produces (matching pack.rs's fixed
-        // 8 KiB), but block size is a real per-file variable - ndzunpack.py's own decode
-        // logic defaults to 4 KiB when block_log2 is unset. See NdzFlagsExtensions.GetBlockSize.
+        // that constant is only what NdzWriter always produces by default (matching
+        // pack.rs's fixed 8 KiB), but block size is a real per-file variable - ndztool.py's
+        // own decode logic defaults to 4 KiB when block_log2 is unset. See NdzFlagsExtensions.GetBlockSize.
         _blockSize = frontMatter.Flags.GetBlockSize();
         _plainBlock = new ZStdBlock(new CompressionOptions { Type = CompressionType.Level1, BlockSize = _blockSize });
         _dictBlock = dictionary == null
