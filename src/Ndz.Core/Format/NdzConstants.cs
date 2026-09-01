@@ -101,6 +101,24 @@ public static class NdzConstants
     /// </summary>
     public const int MaxLevel = 19;
 
+    /// <summary>
+    /// u32 magic "NDZP", little-endian bytes 'N','D','Z','P' - the pair container's own
+    /// magic, distinct from <see cref="Magic"/> ('NDZ1') precisely so `info`/`unpack` can
+    /// tell a pair container from a single .ndz apart from byte 0 alone. Confirmed
+    /// against `ndztool.py`'s `NDZ_PAIR_MAGIC`. See <see cref="Compression.NdzPairContainer"/>.
+    /// </summary>
+    public const uint PairMagic = 0x505A444E;
+
+    /// <summary>
+    /// Size in bytes of one pair-container entry record: `[u32 offset][u32 size]
+    /// [u32 origSize][4-byte gameCode]`. Confirmed against `ndztool.py`'s own
+    /// `struct.unpack_from("&lt;III4s", ...)`.
+    /// </summary>
+    public const int PairEntrySize = 16;
+
+    /// <summary>Offset of the pair container's first entry record - right after its 16-byte header.</summary>
+    public const int PairEntriesOffset = 0x10;
+
     /// <summary>Size in bytes of one outer (frame-level) seek-table entry: u32 csize + u32 dsize.</summary>
     public const int SeekTableEntrySize = 8;
 

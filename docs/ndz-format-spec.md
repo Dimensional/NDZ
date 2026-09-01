@@ -5,10 +5,12 @@ against the format author's own reference packer (a Rust implementation, `pack.r
 2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Corrections
 from the reference packer" below for exactly what changed and why. Compression,
 random-access decompression, the raw-content dictionary (flags bit 5), all five per-block
-filter modes, and base-ROM patch mode (flags bit 4) are all implemented (2026-08-31, see
-"Filter modes"/"Base-ROM patch mode" below). The retired trained-dictionary variant
-(flags bit 2, not worth implementing) and the pair-container format are what's left —
-see "Open questions" and `docs/ndz-remaining-work.md` for the plan.
+filter modes, base-ROM patch mode (flags bit 4), and the pair-container format are all
+implemented (2026-08-31, see "Filter modes"/"Base-ROM patch mode"/"Pair container format"
+below) and cross-verified against `ndztool.py` in both directions - see
+`docs/ndz-remaining-work.md` for the full build history. The only thing left unimplemented
+is the retired trained-dictionary variant (flags bit 2), which nothing produces and isn't
+worth building - see "Open questions".
 
 ## Container layout
 
@@ -373,18 +375,32 @@ rather than risk misreading a trained-dict blob as raw content on the (currently
 impossible, since nothing produces this bit) chance its stored/decompressed sizes
 happened to match.
 
-### Pair container format — encode side now fully specified, still unimplemented here
+### Pair container format — implemented 2026-08-31
 
 An outer container format wrapping two complete `.ndz` blobs side by side, used to ship
 a base-patch pair together with no external base file needed. Both read and write sides
-are now confirmed from `ndztool.py`'s `--pair-out`:
+are confirmed from `ndztool.py`'s `--pair-out`:
 `NDZ_PAIR_MAGIC = 0x505A444E` ('NDZP'), header `[magic][hdrSize=16384][nRoms][reserved]`
 (all u32) at offset 0, then per-entry `[offset][size][origSize][gameCode]` (u32 x3 +
 4 bytes) at `0x10 + 0x10*i` - entries themselves are the base blob followed by the
 patched blob, each padded to a 16 KiB (front-matter-size) boundary. One entry is
 self-contained; the other (the `BasePatch`-flagged one) resolves its base to the *other*
-entry in the same container, not an externally-supplied file. Nothing in `Ndz.Core`
-models this yet - it sits above the single-`.ndz` level entirely.
+entry in the same container, not an externally-supplied file.
+
+**Implemented** (`Ndz.Core.Format.NdzPairEntry`, `Ndz.Core.Compression.NdzPairWriter`/
+`NdzPairContainer` - mirroring the `NdzWriter`/`NdzArchive` write/read split; see
+`docs/ndz-remaining-work.md` for the design). `NdzPairContainer.TryRead`/`Read` detect a
+pair container purely from its magic (distinct from a single `.ndz`'s), resolve which
+entry is self-contained, and open either entry - a base-patched one transparently
+decompresses the self-contained one first to resolve its base, matching `ndztool.py`'s
+own `cmd_unpack` exactly. `NdzArchive.ReadInfo` is reused per-entry, so `info` never
+needs to decode either side just to summarize it. The CLI's `compress` gained
+`--pair-out` (needs `--base`), and `decompress`/`verify` gained `--index`.
+
+Verified in both directions against a real `ndztool.py --pair-out` on real byte content:
+our pair-container output's both entries decode via `ndztool.py unpack --index 0`/`1`
+sha256-identical to their sources, and a real `ndztool.py --pair-out`-packed container's
+both entries decode correctly through the CLI's `verify --index 0`/`1`.
 
 ### Base-ROM patch mode (flags bit 4) — implemented 2026-08-31
 
@@ -435,10 +451,9 @@ identical input aren't guaranteed to agree with each other. This doesn't affect
 interop - decode only ever needs whichever offset was actually recorded, never a
 specific *selection* of it.
 
-All items above are explicitly out of scope for this v1, not silently dropped: the
-front-matter fields and `NdzFlags`/`BlockMode` values exist and document exactly what's
-unconfirmed or unimplemented, and both read and write paths reject anything that would
-require the unimplemented behavior rather than mishandling it.
+Only the retired trained-dictionary flag (bit 2) remains genuinely out of scope now, and
+deliberately so, not silently dropped: `NdzFlags` documents exactly why, and both read
+and write paths reject anything that would require it rather than mishandling it.
 
 ## Reference materials
 

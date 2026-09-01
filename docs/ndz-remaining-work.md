@@ -169,7 +169,23 @@ array, a new required-sometimes constructor parameter on both `NdzWriter` and
 the same rigor as the rest of this project: unit tests plus a real cross-check against
 `ndztool.py --base` on real byte content, not just synthetic fixtures.
 
-## 3. Pair container
+**Update 2026-08-31: §3 (pair container) is done - all three items in this plan are now
+implemented.** `Ndz.Core.Format.NdzPairEntry` (the per-entry record) plus
+`Ndz.Core.Compression.NdzPairWriter`/`NdzPairContainer` (write/read, mirroring the
+`NdzWriter`/`NdzArchive` split), matching `ndztool.py`'s `--pair-out`/`read_pair_entries`
+exactly. `NdzArchive.ReadInfo` is reused per-entry so `info` never needs to decode
+either side just to summarize it. The CLI's `compress` gained `--pair-out` (needs
+`--base`, mirroring `ndztool.py`'s own requirement), and `decompress`/`verify` gained
+`--index` to pick which entry of a detected pair container to work with (auto-detected by
+magic, default: the self-contained one).
+
+Verified in both directions against a real `ndztool.py --pair-out` on real byte content:
+our pair-container output's both entries decode via `ndztool.py unpack --index 0/1`
+sha256-identical to their sources, and a real `ndztool.py --pair-out`-packed container's
+both entries decode correctly through the CLI's `verify --index 0/1`. 120 tests passing
+(6 new: `PairContainerTests`).
+
+## 3. Pair container — done
 
 **Confirmed format** (`ndztool.py`'s `cmd_pack`'s `--pair-out`/`read_pair_entries`):
 an outer wrapper, not a `.ndz` variant - magic `NDZ_PAIR_MAGIC = 0x505A444E` ('NDZP'),
@@ -194,7 +210,13 @@ pair otherwise - so this is naturally the last of the three to build.
 
 1. ~~**Filter modes**~~ - done, see the update note above.
 2. ~~**Base-patch**~~ - done, see the update note above.
-3. **Pair container** - thin wrapper now that (2) exists. Next up.
+3. ~~**Pair container**~~ - done, see the update note above.
+
+All three items in this plan are now implemented and cross-verified against
+`ndztool.py`. What's left, per `docs/ndz-format-spec.md`'s "Open questions": the retired
+trained-dictionary flag (bit 2 - confirmed not worth implementing, nothing produces it),
+and getting `patchbench.py` itself from Mena (not blocking anything at this point -
+`ndztool.py` alone was sufficient for all three items here).
 
 Each step: implement, unit-test, then cross-check against a real `ndztool.py` run in an
 isolated venv on real byte content (not just synthetic fixtures) in both directions -
