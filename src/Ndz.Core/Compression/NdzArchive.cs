@@ -17,7 +17,9 @@ namespace Ndz.Core.Compression;
 /// Every block must be tagged <see cref="BlockMode.Plain"/>, <see cref="BlockMode.Dict"/>,
 /// or one of the five filter modes (see <see cref="BlockMode"/>/<see cref="BlockFilters"/>)
 /// - any other raw mode byte fails loudly, naming the exact frame/block/mode, rather than
-/// misinterpreting bytes it doesn't understand.
+/// misinterpreting bytes it doesn't understand. A block with a recorded base-window
+/// offset (<see cref="NdzFlags.BasePatch"/>, see <see cref="BaseRomIndex"/>) overrides
+/// its own mode byte, which is always <see cref="BlockMode.Plain"/> in that case anyway.
 ///
 /// Holds the whole compressed file in memory; frames are decompressed lazily and the
 /// most recently used one is cached for fast sequential reads.
@@ -248,14 +250,18 @@ public sealed class NdzArchive : IDisposable
 
     /// <summary>
     /// Decompresses one frame: parses its private
-    /// <c>[u32 csize × nblocks][u8 mode × nblocks if Filters][compressed block bytes]</c>
-    /// layout and decodes each <see cref="_blockSize"/>-byte block in turn.
+    /// <c>[u32 csize × nblocks][u8 mode × nblocks if Filters][u32 baseOff × nblocks if
+    /// BasePatch][compressed block bytes]</c> layout and decodes each
+    /// <see cref="_blockSize"/>-byte block in turn.
     ///
     /// The mode array only exists when <see cref="NdzFlags.Filters"/> is set - confirmed
     /// against both the reference packer (which sets it unconditionally, since it always
     /// writes a mode array) and `ndztool.py`'s own decoder. Without it, every block in
     /// the frame is uniformly <see cref="BlockMode.Dict"/> (if this archive has a
     /// dictionary) or <see cref="BlockMode.Plain"/> (if not) - no per-block byte to read.
+    /// The baseOff array likewise only exists when <see cref="NdzFlags.BasePatch"/> is
+    /// set, and (when present) a non-sentinel offset for a block overrides its mode byte
+    /// entirely - see the loop body's own remarks.
     /// </summary>
     private byte[] GetDecompressedFrame(int frameIndex)
     {
