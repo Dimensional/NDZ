@@ -107,7 +107,7 @@ packer: it is not simply a set of independent boolean flags.
 | 4 | `BasePatch` — this file's frames encode a patch against a base `.nds` (previously the only bit this spec documented) |
 | 5 | `RawDictionary` — a raw, self-referential content-dictionary section follows the front-matter |
 | 6–7 | never set by the reference packer — reserved/unknown |
-| 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against `ndztool.py`'s own decode logic (see "Reference materials"; we have that script, not the `patchbench.py` module it defers the real format definition to). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's width is confirmed exactly 8 bits (bits 8-15) by `ndztool.py`'s own `describe_flags`, which computes `(flags >> 8) & 0xFF`. |
+| 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against `ndztool.py`'s own decode logic (see "Reference materials"). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's width is confirmed exactly 8 bits (bits 8-15) by `ndztool.py`'s own `describe_flags`, which computes `(flags >> 8) & 0xFF`. |
 
 Do not repurpose any undefined bit speculatively - reserved bits stay zero pending the
 format author's confirmation of their meaning.
@@ -349,10 +349,11 @@ one consumer (`ndz_studio`) of the underlying `ndzcore` library, not Mena's own 
 tool - treat as strong provisional evidence, not authoritative. **Update 2026-08-31**:
 this empirical `Dict=0`/`Plain=1` finding, and the five filter values, are now also
 independently consistent with a screenshot explanation from Mena's own Claude session
-(relayed through the user) and `ndzunpack.py`'s own code - see "Filter modes" below. We
-still do not have `patchbench.py` itself, only those two secondhand sources - no
-contradiction found between them and the black-box WASM probing, but neither is the
-format's real source.
+(relayed through the user, secondhand) and `ndzunpack.py`'s own code - see "Filter modes"
+below. `ndztool.py` (which superseded `ndzunpack.py`) was extracted directly from the
+real `patchbench.py` module by a Claude session with actual read access to it, not
+reconstructed secondhand - see `reference/mena-patchbench/README.md`. No contradiction
+found between any of these and the black-box WASM probing either.
 
 ### Filter modes — algorithm confirmed and implemented 2026-08-31
 
@@ -502,8 +503,10 @@ and write paths reject anything that would require it rather than mishandling it
   own reference packer. The ground truth this port was corrected against; see its
   README for what it needs (the `census`/`filters` modules) that we don't have yet.
 - `reference/mena-patchbench/` - shared 2026-08-31, explicitly described (in its own
-  docstring) as duplicating `patchbench.py`'s logic rather than being that module
-  itself, which we still don't have:
+  docstring) as duplicating `patchbench.py`'s logic rather than being that module itself.
+  Confirmed 2026-09-01: it was extracted directly from the real module by a Claude
+  session with actual read access to it, not reconstructed secondhand - see that folder's
+  README for the full provenance:
   - `ndztool.py` - a complete, **self-contained** pack + unpack tool, no local imports,
     just `pip install -r requirements.txt` (`zstandard`, optionally `lz4`). By far the
     strongest reference material available - real, runnable code covering both encode

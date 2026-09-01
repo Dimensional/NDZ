@@ -25,10 +25,8 @@ control flow) that would otherwise have to be re-derived from a pasted chat snip
 
 **Still needed from Mena, if available**: the `census` and `filters` modules
 themselves - not for their algorithms anymore (both are now confirmed via `ndztool.py`,
-see above), just as the format author's own original source rather than a duplicate.
-`Ndz.Core`'s reader can parse any real `.ndz` file's structure but deliberately refuses
-to decode a block tagged with anything other than `MODE_PLAIN`/`MODE_DICT` - see
-`BlockMode`'s remarks in the .NET port.
+and fully implemented on the .NET side - see `BlockFilters`/`RawDictionaryBuilder`), just
+as the format author's own original Rust source rather than a duplicate.
 
 Note: `census` and `filters` are *not* the crates.io packages of the same name (checked
 — `census` on crates.io is an unrelated object-lifetime-tracking crate, `filters` is an

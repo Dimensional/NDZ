@@ -5,9 +5,9 @@ using Ndz.Core.Format;
 namespace Ndz.Core.Tests;
 
 /// <summary>
-/// Confirmed against `ndztool.py`'s own decode logic (see reference/mena-patchbench -
-/// we have that script, not the `patchbench.py` module it defers to) that block size is
-/// a real per-file variable read from the front-matter flags, not always 8192: that
+/// Confirmed against `ndztool.py`'s own decode logic (see reference/mena-patchbench)
+/// that block size is a real per-file variable read from the front-matter flags, not
+/// always 8192: that
 /// script's own default (when the log2 subfield is left at 0) is 4096.
 /// Before this test existed, <c>NdzArchive</c> hardcoded
 /// <see cref="NdzConstants.BlockSize"/> at every block-boundary computation instead of

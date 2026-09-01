@@ -1,9 +1,14 @@
 # mena-patchbench
 
 Shared by the user 2026-08-31, relayed from Mena Azer (mena@phenommod.com, the NDZ
-format's author), built by Mena's own Claude session against her real internal
-`patchbench.py` module - real artifacts from her, after
-[`reference/mena-packer/pack.rs`](../mena-packer/pack.rs).
+format's author), after [`reference/mena-packer/pack.rs`](../mena-packer/pack.rs).
+`ndztool.py` was produced by a Claude session running in Mena's own IDE, with real,
+direct read access to her actual `patchbench.py` module - deliberately made
+self-contained (no import of `patchbench.py` itself) at her request, per its own
+docstring ("The format logic is duplicated from `patchbench.py`, which remains the
+reference implementation"). Confirmed 2026-09-01: this was a direct, AI-assisted
+extraction from the real module in hand, not a human's secondhand recollection of it -
+see "On `patchbench.py` itself" below for what that does and doesn't settle.
 
 - **`ndztool.py`** (arrived later the same day) - a complete, **self-contained**
   pack + unpack tool. No local imports; `pip install -r requirements.txt`
@@ -23,12 +28,23 @@ format's author), built by Mena's own Claude session against her real internal
   pulled in the actual module, which we don't have) was **removed 2026-08-31** as
   redundant once `ndztool.py` arrived and independently confirmed everything it had
   shown - see git history if it's ever needed again.
+- **`ndztool_mt.py`** - **NOT from Mena.** A local, unofficial performance experiment
+  added by this project 2026-09-01 (`ndztool.py`'s pack path is single-threaded; this
+  copy adds `--workers N` process-parallel packing via `ProcessPoolExecutor`, format
+  logic otherwise untouched). Verified byte-identical to real `ndztool.py` output at
+  `--workers 1` (same code path, unmodified) and at `--workers 4` for both a plain pack
+  and a base-patch pack. Never cite this as a reference source - `ndztool.py` (this
+  file, always kept byte-for-byte as Mena shared it) is the confirmed one.
 
-**We still do not have `patchbench.py` itself** - both scripts are explicit in their own
-docstrings that they duplicate its logic rather than being that module. Everything below
-is confirmed from these two scripts' own code (real, readable, testable) plus the
-screenshot explanation (secondhand, Mena's Claude describing patchbench.py, not the
-source itself) - never overstate this as "confirmed against patchbench.py."
+## On `patchbench.py` itself
+
+We don't have the file, but that's no longer treated as an open gap - see the header
+above: `ndztool.py` was extracted directly from the real module by a Claude session with
+actual read access to it, not reconstructed secondhand from a description. Everything
+below is still cited to `ndztool.py`'s own code (real, readable, testable) rather than to
+`patchbench.py` by name, since that's the artifact actually in hand - but the reasonable
+default is that `ndztool.py` reflects it faithfully, not that it's an approximation
+awaiting confirmation from a file we're still missing.
 
 ## Methodology: don't trust a secondhand script at face value
 
@@ -111,10 +127,10 @@ directions - not just from reading code. That process:
   flag-aware on read. See `docs/ndz-format-spec.md`'s "Per-block compression mode".
 - **A firmware/hardware decoder exists**: `filter-modes-explanation.md` cites
   `ntrCardRomNdz.cpp` - a C++ decoder, presumably for the actual DS-compatible cartridge
-  hardware ("DSPico") this format targets. Not something we've seen referenced before;
-  we have neither this file nor `patchbench.py` itself.
+  hardware ("DSPico") this format targets. Not something we've seen referenced before,
+  and not something we have a copy of.
 
-**Still needed from Mena, if available**: `patchbench.py` itself. Nothing algorithmic is
-strictly needed from her for base-patch or the pair container anymore, now that the
-mechanism is known - `ndztool.py` alone is sufficient to implement both, if/when that
-becomes a priority.
+Nothing algorithmic is needed from Mena for base-patch or the pair container - the
+mechanism is known and `ndztool.py` alone was sufficient to implement both. `patchbench.py`
+itself and `ntrCardRomNdz.cpp` remain unseen, but per the header above that's no longer
+treated as a live blocker for anything format-related.

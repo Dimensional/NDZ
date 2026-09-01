@@ -214,10 +214,11 @@ pair otherwise - so this is naturally the last of the three to build.
 3. ~~**Pair container**~~ - done, see the update note above.
 
 All three items in this plan are now implemented and cross-verified against
-`ndztool.py`. What's left, per `docs/ndz-format-spec.md`'s "Open questions": the retired
-trained-dictionary flag (bit 2 - confirmed not worth implementing, nothing produces it),
-and getting `patchbench.py` itself from Mena (not blocking anything at this point -
-`ndztool.py` alone was sufficient for all three items here).
+`ndztool.py`. What's left, per `docs/ndz-format-spec.md`'s "Open questions": only the
+retired trained-dictionary flag (bit 2 - confirmed not worth implementing, nothing
+produces it). `patchbench.py` itself was extracted directly into `ndztool.py` by a Claude
+session with real access to it (see `reference/mena-patchbench/README.md`), so it isn't
+treated as a separate missing source anymore.
 
 Each step: implement, unit-test, then cross-check against a real `ndztool.py` run in an
 isolated venv on real byte content (not just synthetic fixtures) in both directions -
