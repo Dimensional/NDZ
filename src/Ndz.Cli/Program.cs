@@ -48,7 +48,8 @@ static void PrintUsage()
         ndz - NDS ROM <-> seekable-zstd .ndz converter
 
         Usage:
-          ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N] [--dict <file>]
+          ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N]
+                                          [--no-filters] [--dict <file>]
                                                              Compress a decrypted .nds into .ndz.
                                                              --level defaults to 19 and cannot exceed
                                                              {NdzConstants.MaxLevel} - a hardware limit of the
@@ -58,9 +59,12 @@ static void PrintUsage()
                                                              of two, and cannot exceed {NdzConstants.MaxBlockSize} - also a
                                                              hardware limit (bigger blocks take too long
                                                              to fetch and decompress on a cache miss).
-                                                             --dict primes compression with a raw content
-                                                             dictionary (its bytes are stored verbatim in
-                                                             the output too).
+                                                             --no-filters skips trying the five per-block
+                                                             byte-transform filters (on by default - real,
+                                                             brute-force extra compression cost, up to ~6x
+                                                             more zstd calls per full block). --dict primes
+                                                             compression with a raw content dictionary (its
+                                                             bytes are stored verbatim in the output too).
           ndz decompress <in.ndz> <out.nds>                 Reconstruct the original .nds.
           ndz info <in.ndz>                                 Print front-matter and seek-table summary.
           ndz verify <in.ndz> <in.nds>                       Decompress and byte-compare against the
@@ -69,9 +73,9 @@ static void PrintUsage()
         Notes:
           - ROMs should be decrypted first; NDZ compresses raw bytes as-is.
           - Base-ROM patch mode (front-matter flags bit 4) is not implemented yet.
-          - The five byte-transform filter modes aren't implemented yet; decompress fails with a
-            clear error naming the exact frame/block/mode rather than misreading such a file.
-            Raw-dictionary mode (Plain/Dict per block) is fully implemented, both directions.
+          - The five byte-transform filter modes and raw-dictionary mode are both fully
+            implemented, both directions - decompress correctly reads real files from the
+            reference tooling using either.
         """);
 }
 
@@ -80,6 +84,7 @@ static int RunCompress(string[] args)
     string? inPath = null, outPath = null, dictPath = null;
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
+    bool enableFilters = true;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -98,6 +103,10 @@ static int RunCompress(string[] args)
                 Console.Error.WriteLine($"--block-size requires an integer value in bytes (power of two, up to {NdzConstants.MaxBlockSize}).");
                 return 1;
             }
+        }
+        else if (args[i] == "--no-filters")
+        {
+            enableFilters = false;
         }
         else if (args[i] == "--dict")
         {
@@ -119,7 +128,7 @@ static int RunCompress(string[] args)
 
     if (inPath is null || outPath is null)
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--dict <file>]");
+        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--no-filters] [--dict <file>]");
         return 1;
     }
 
@@ -142,7 +151,7 @@ static int RunCompress(string[] args)
         : new NdzDictionary { Content = File.ReadAllBytes(dictPath) };
 
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary, blockSize);
+    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary, blockSize, enableFilters);
     long compressedSize = new FileInfo(outPath).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;

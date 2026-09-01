@@ -5,11 +5,12 @@ using Ndz.Core.Format;
 namespace Ndz.Core.Tests;
 
 /// <summary>
-/// Confirms the reader fails loudly - naming the exact frame/block/mode - on any
-/// per-block compression mode other than <see cref="BlockMode.Plain"/>, rather than
-/// misinterpreting bytes it doesn't understand. See BlockMode's remarks: real .ndz
-/// files from the reference packer can and do use other modes (raw-dictionary,
-/// filters), which this port can't decode yet.
+/// Confirms the reader fails loudly - naming the exact frame/block/mode - on a mode byte
+/// it genuinely can't handle (an out-of-range value, or Dict/0 with no dictionary
+/// section present), rather than misinterpreting bytes it doesn't understand. All 7
+/// named <see cref="BlockMode"/> values (Plain/Dict/the five filters) are implemented -
+/// see <see cref="BlockFiltersTests"/> and <see cref="DictionaryRoundTripTests"/> for
+/// those.
 /// </summary>
 public class BlockModeTests
 {
@@ -113,11 +114,12 @@ public class BlockModeTests
         Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, archive.DecompressAll());
     }
 
+    /// <summary>Dict/0 with no dictionary section, and any value outside the 7 defined <see cref="BlockMode"/> values (7-255), are the only mode bytes this reader can't handle.</summary>
     [Theory]
     [InlineData(0)]
-    [InlineData(2)]
+    [InlineData(7)]
     [InlineData(255)]
-    public void NonPlainMode_ThrowsNamingFrameBlockAndMode(byte modeByte)
+    public void UnhandleableMode_ThrowsNamingFrameBlockAndMode(byte modeByte)
     {
         using var archive = NdzArchive.Open(BuildSingleBlockNdz(modeByte));
 

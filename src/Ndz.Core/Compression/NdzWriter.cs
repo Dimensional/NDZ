@@ -10,8 +10,7 @@ namespace Ndz.Core.Compression;
 /// an optional verbatim dictionary section, then 128 KB frames (each internally
 /// subdivided into 8 KB blocks with a per-block mode byte - see
 /// <see cref="NdzConstants"/>/<see cref="BlockMode"/>), then a seek-table trailer. No
-/// "filter" transforms yet (see docs/ndz-format-spec.md) and no base-ROM patch mode
-/// either - see <see cref="NdzFlags"/>.
+/// base-ROM patch mode yet - see <see cref="NdzFlags"/>.
 ///
 /// Frames are independent (dictionary state aside, which is read-only/shared - see
 /// below), so they're compressed in parallel - one pair of <see cref="ZStdBlock"/>s per
@@ -31,7 +30,18 @@ public static class NdzWriter
     /// fixed choice) - block size is a real per-file variable in the format (see
     /// <see cref="NdzFlagsExtensions"/>'s remarks), not something every writer must fix.
     /// </param>
-    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize)
+    /// <param name="enableFilters">
+    /// Try the five byte-transform filter modes (see <see cref="BlockMode"/>/
+    /// <see cref="BlockFilters"/>) on every full block, keeping whichever of plain/dict/
+    /// filter compresses smallest - mirrors `ndztool.py`'s own default (its
+    /// `--no-filters` is opt-out, not opt-in). This is real, brute-force extra cost (up
+    /// to 5 more zstd compress calls per full block, matching the reference exactly, not
+    /// a shortcut around it) - set false to skip it if that cost isn't worth it for a
+    /// given ROM. Either way the front-matter's `Filters` bit stays set and every block
+    /// still gets a mode byte, since Plain vs. Dict alone already needs one - see
+    /// <see cref="NdzFlags.Filters"/>'s remarks.
+    /// </param>
+    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
     {
         ArgumentNullException.ThrowIfNull(rom);
         ArgumentNullException.ThrowIfNull(output);
@@ -115,7 +125,7 @@ public static class NdzWriter
             {
                 int frameOffset = f * NdzConstants.FrameSize;
                 int frameLength = Math.Min(NdzConstants.FrameSize, rom.Length - frameOffset);
-                (frames[f], seekTable[f]) = CompressFrame(rom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize);
+                (frames[f], seekTable[f]) = CompressFrame(rom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters);
                 return threadLocalBlocks;
             },
             localFinally: threadLocalBlocks =>
@@ -130,11 +140,11 @@ public static class NdzWriter
         WriteTrailer(output, seekTable);
     }
 
-    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize)
+    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
     {
         byte[] rom = File.ReadAllBytes(inputNdsPath);
         using var output = File.Create(outputNdzPath);
-        Compress(rom, output, level, dictionary, blockSize);
+        Compress(rom, output, level, dictionary, blockSize, enableFilters);
     }
 
     /// <summary>
@@ -151,25 +161,50 @@ public static class NdzWriter
         return Math.Clamp(Math.Max(bits, 15), 10, 31);
     }
 
+    /// <summary>Delta filter modes tried per full block, paired with their stride - see <see cref="BlockFilters"/>.</summary>
+    private static readonly (BlockMode Mode, int Stride)[] DeltaFilters =
+    {
+        (BlockMode.Delta1, 1),
+        (BlockMode.Delta2, 2),
+        (BlockMode.Delta4, 4),
+    };
+
+    /// <summary>Shuffle filter modes tried per full block, paired with their plane count - see <see cref="BlockFilters"/>.</summary>
+    private static readonly (BlockMode Mode, int Planes)[] ShuffleFilters =
+    {
+        (BlockMode.Shuffle2, 2),
+        (BlockMode.Shuffle4, 4),
+    };
+
     /// <summary>
     /// Compresses one frame's worth of ROM bytes into its private
     /// <c>[u32 csize × nblocks][u8 mode × nblocks][compressed block bytes]</c> layout
-    /// (see the type-level remarks). Each block is compressed plain and, if a dictionary
-    /// is active, also dictionary-primed - whichever is smaller wins, tagged accordingly
-    /// (mirrors the reference packer's own per-block best-of comparison, minus the
-    /// filter-transform candidates it also tries - not implemented here).
+    /// (see the type-level remarks). Every block is compressed plain and, if a
+    /// dictionary is active, also dictionary-primed; a *full* block (not the frame's
+    /// possibly-short trailing one - see <see cref="BlockFilters"/>/<see cref="BlockMode"/>)
+    /// is additionally tried through each of the five filter transforms via the plain
+    /// codec (never dictionary-primed, matching `ndztool.py`'s own
+    /// `compress_block_best`). Whichever candidate compresses smallest wins, tagged
+    /// accordingly.
     /// </summary>
     private static (byte[] FrameBytes, SeekTableEntry Entry) CompressFrame(
-        byte[] rom, int frameOffset, int frameLength, int frameIndex, ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize)
+        byte[] rom, int frameOffset, int frameLength, int frameIndex, ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters)
     {
         int blockCount = (frameLength + blockSize - 1) / blockSize;
-        byte[] plainDstBuffer = new byte[plainBlock.RequiredCompressOutputSize];
+        int maxOutputSize = plainBlock.RequiredCompressOutputSize;
         // Deliberately sized from plainBlock, not dictBlock: dictBlock's own
         // RequiredCompressOutputSize is inflated to 1 << windowLog once WindowBits is set
-        // (megabytes, not ~8 KB) - see ComputeDictionaryWindowBits's remarks. Both blocks
-        // compress the same BlockSize-bounded input, so plainBlock's correctly-sized bound
-        // is safe for either.
-        byte[]? dictDstBuffer = dictBlock == null ? null : new byte[plainBlock.RequiredCompressOutputSize];
+        // (megabytes, not ~8 KB) - see ComputeDictionaryWindowBits's remarks. Every
+        // candidate here (plain, dict, and every filter, which always compresses via
+        // plainBlock) compresses the same BlockSize-bounded input, so this bound is safe
+        // for all of them.
+        //
+        // Two equally-sized buffers, swapped by reference whenever a candidate beats the
+        // current best, rather than one buffer per candidate mode - keeps the candidate
+        // count (2 today, up to 7 with filters) cheap to extend without more allocation.
+        byte[] bestDstBuffer = new byte[maxOutputSize];
+        byte[] candidateDstBuffer = new byte[maxOutputSize];
+        byte[] filterSrcBuffer = new byte[blockSize];
 
         var blockCsizes = new uint[blockCount];
         var blockModes = new byte[blockCount];
@@ -180,33 +215,54 @@ public static class NdzWriter
             int blockOffset = frameOffset + b * blockSize;
             int blockLength = Math.Min(blockSize, frameOffset + frameLength - blockOffset);
 
-            int plainDstCount = plainDstBuffer.Length;
-            CompressionResultCode plainResult = plainBlock.Compress(rom, blockOffset, blockLength, plainDstBuffer, 0, ref plainDstCount);
+            int bestCount = bestDstBuffer.Length;
+            CompressionResultCode plainResult = plainBlock.Compress(rom, blockOffset, blockLength, bestDstBuffer, 0, ref bestCount);
             if (plainResult != CompressionResultCode.Success)
                 throw new InvalidDataException($"ZStd compression failed on frame {frameIndex} block {b}: {plainResult}");
-
-            byte[] bestBuffer = plainDstBuffer;
-            int bestCount = plainDstCount;
-            byte mode = (byte)BlockMode.Plain;
+            BlockMode mode = BlockMode.Plain;
 
             if (dictBlock != null)
             {
-                int dictDstCount = dictDstBuffer!.Length;
-                CompressionResultCode dictResult = dictBlock.Compress(rom, blockOffset, blockLength, dictDstBuffer, 0, ref dictDstCount);
+                int candidateCount = candidateDstBuffer.Length;
+                CompressionResultCode dictResult = dictBlock.Compress(rom, blockOffset, blockLength, candidateDstBuffer, 0, ref candidateCount);
                 if (dictResult != CompressionResultCode.Success)
                     throw new InvalidDataException($"ZStd dictionary compression failed on frame {frameIndex} block {b}: {dictResult}");
 
-                if (dictDstCount < bestCount)
+                if (candidateCount < bestCount)
                 {
-                    bestBuffer = dictDstBuffer;
-                    bestCount = dictDstCount;
-                    mode = (byte)BlockMode.Dict;
+                    (bestDstBuffer, candidateDstBuffer) = (candidateDstBuffer, bestDstBuffer);
+                    bestCount = candidateCount;
+                    mode = BlockMode.Dict;
+                }
+            }
+
+            // Filters only ever apply to a FULL block - matches ndztool.py's own
+            // `len(blk) == block_dsize` condition exactly (not merely "some power-of-two
+            // length"), so a frame's short trailing block never qualifies and Shuffle's
+            // plane split always divides evenly.
+            if (enableFilters && blockLength == blockSize)
+            {
+                ReadOnlySpan<byte> blockSource = rom.AsSpan(blockOffset, blockLength);
+                Span<byte> filterSrc = filterSrcBuffer.AsSpan(0, blockLength);
+
+                foreach (var (filterMode, stride) in DeltaFilters)
+                {
+                    BlockFilters.DeltaForward(blockSource, filterSrc, stride);
+                    TryFilterCandidate(filterMode, filterSrcBuffer, blockLength, plainBlock, frameIndex, b,
+                        ref bestDstBuffer, ref candidateDstBuffer, ref bestCount, ref mode);
+                }
+
+                foreach (var (filterMode, planes) in ShuffleFilters)
+                {
+                    BlockFilters.ShuffleForward(blockSource, filterSrc, planes);
+                    TryFilterCandidate(filterMode, filterSrcBuffer, blockLength, plainBlock, frameIndex, b,
+                        ref bestDstBuffer, ref candidateDstBuffer, ref bestCount, ref mode);
                 }
             }
 
             blockCsizes[b] = (uint)bestCount;
-            blockModes[b] = mode;
-            blockData.Write(bestBuffer, 0, bestCount);
+            blockModes[b] = (byte)mode;
+            blockData.Write(bestDstBuffer, 0, bestCount);
         }
 
         var frameBytes = new byte[blockCount * 4 + blockCount + blockData.Length];
@@ -216,6 +272,24 @@ public static class NdzWriter
         Buffer.BlockCopy(blockData.GetBuffer(), 0, frameBytes, blockCount * 4 + blockCount, (int)blockData.Length);
 
         return (frameBytes, new SeekTableEntry((uint)frameBytes.Length, (uint)frameLength));
+    }
+
+    /// <summary>Compresses one already-filtered candidate and, if it beats the current best, swaps it in.</summary>
+    private static void TryFilterCandidate(
+        BlockMode filterMode, byte[] filterSrcBuffer, int blockLength, ZStdBlock plainBlock, int frameIndex, int blockIndex,
+        ref byte[] bestDstBuffer, ref byte[] candidateDstBuffer, ref int bestCount, ref BlockMode mode)
+    {
+        int candidateCount = candidateDstBuffer.Length;
+        CompressionResultCode result = plainBlock.Compress(filterSrcBuffer, 0, blockLength, candidateDstBuffer, 0, ref candidateCount);
+        if (result != CompressionResultCode.Success)
+            throw new InvalidDataException($"ZStd filter compression failed on frame {frameIndex} block {blockIndex} ({filterMode}): {result}");
+
+        if (candidateCount < bestCount)
+        {
+            (bestDstBuffer, candidateDstBuffer) = (candidateDstBuffer, bestDstBuffer);
+            bestCount = candidateCount;
+            mode = filterMode;
+        }
     }
 
     private static void WriteTrailer(Stream output, SeekTableEntry[] seekTable)

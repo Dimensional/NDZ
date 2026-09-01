@@ -14,10 +14,10 @@ namespace Ndz.Core.Compression;
 /// size is read from the file's own front-matter flags, not assumed to be
 /// <see cref="NdzConstants.BlockSize"/> - see <see cref="Format.NdzFlagsExtensions.GetBlockSize"/>.
 ///
-/// Every block must be tagged <see cref="BlockMode.Plain"/> or <see cref="BlockMode.Dict"/>
-/// - this reader has no way to decode filter-transformed blocks yet (see
-/// <see cref="BlockMode"/>'s remarks) and fails loudly, naming the exact frame/block/mode,
-/// rather than misinterpreting bytes it doesn't understand.
+/// Every block must be tagged <see cref="BlockMode.Plain"/>, <see cref="BlockMode.Dict"/>,
+/// or one of the five filter modes (see <see cref="BlockMode"/>/<see cref="BlockFilters"/>)
+/// - any other raw mode byte fails loudly, naming the exact frame/block/mode, rather than
+/// misinterpreting bytes it doesn't understand.
 ///
 /// Holds the whole compressed file in memory; frames are decompressed lazily and the
 /// most recently used one is cached for fast sequential reads.
@@ -29,6 +29,11 @@ public sealed class NdzArchive : IDisposable
     private readonly ZStdBlock _plainBlock;
     private readonly ZStdBlock? _dictBlock;
     private readonly int _blockSize;
+    // Scratch space for Shuffle2/Shuffle4 blocks: ShuffleInverse is a full gather, not
+    // an in-place operation, so a shuffled block is decompressed here first, then
+    // scattered into the real output buffer. Sized once to the archive's own block size
+    // and reused across every block/frame.
+    private readonly byte[] _shuffleScratch;
     private byte[]? _cachedFrame;
     private int _cachedFrameIndex = -1;
     private bool _disposed;
@@ -53,6 +58,7 @@ public sealed class NdzArchive : IDisposable
         _dictBlock = dictionary == null
             ? null
             : new ZStdBlock(new CompressionOptions { Type = CompressionType.Level1, BlockSize = _blockSize, InitProperties = dictionary });
+        _shuffleScratch = new byte[_blockSize];
 
         _compressedFrameOffsets = new long[seekTable.Length];
         long c = payloadStart;
@@ -191,8 +197,6 @@ public sealed class NdzArchive : IDisposable
     /// writes a mode array) and `ndztool.py`'s own decoder. Without it, every block in
     /// the frame is uniformly <see cref="BlockMode.Dict"/> (if this archive has a
     /// dictionary) or <see cref="BlockMode.Plain"/> (if not) - no per-block byte to read.
-    /// See the type-level remarks for why any mode other than <see cref="BlockMode.Plain"/>/
-    /// <see cref="BlockMode.Dict"/> throws.
     /// </summary>
     private byte[] GetDecompressedFrame(int frameIndex)
     {
@@ -229,22 +233,33 @@ public sealed class NdzArchive : IDisposable
             var mode = hasModesArray ? (BlockMode)modes[b] : uniformMode;
             int blockDsize = Math.Min(_blockSize, (int)entry.DecompressedSize - destOffset);
 
+            // Every mode other than Dict decodes through the plain codec - filter modes
+            // included, since the transform is applied to the plaintext before/after a
+            // perfectly ordinary plain zstd block (matches ndztool.py's own
+            // decompress_v2_adv: only NDZ_MODE_DICT reaches the dict decompressor).
+            int deltaStride = BlockFilters.GetDeltaStride(mode);
+            int shufflePlanes = BlockFilters.GetShufflePlaneCount(mode);
             ZStdBlock decoder;
-            if (mode == BlockMode.Plain)
+            if (mode == BlockMode.Dict)
+            {
+                if (_dictBlock == null)
+                {
+                    throw new NotSupportedException(
+                        $"Frame {frameIndex} block {b} uses Dict/{(byte)BlockMode.Dict} compression mode, " +
+                        "but this file has no dictionary section.");
+                }
+                decoder = _dictBlock;
+            }
+            else if (mode == BlockMode.Plain || deltaStride != 0 || shufflePlanes != 0)
             {
                 decoder = _plainBlock;
-            }
-            else if (mode == BlockMode.Dict && _dictBlock != null)
-            {
-                decoder = _dictBlock;
             }
             else
             {
                 throw new NotSupportedException(
-                    $"Frame {frameIndex} block {b} uses compression mode {(byte)mode}" +
-                    (mode == BlockMode.Dict ? " (dictionary mode, but this file has no dictionary section)" : "") +
-                    $", which isn't implemented (only Plain/{(byte)BlockMode.Plain} and Dict/{(byte)BlockMode.Dict} are " +
-                    "supported here - filter modes need the reference packer's filters source confirmed first; see BlockMode's remarks).");
+                    $"Frame {frameIndex} block {b} uses compression mode {(byte)mode}, which isn't a " +
+                    "recognized BlockMode value (0-6) - the file may be corrupt or use a format extension " +
+                    "this port doesn't know about.");
             }
 
             if (srcOffset + blockCsize > blockData.Length)
@@ -253,15 +268,26 @@ public sealed class NdzArchive : IDisposable
                     $"Frame {frameIndex} block {b}'s compressed size ({blockCsize}) runs past the frame's declared data.");
             }
 
+            // Shuffle needs a scratch decode target (ShuffleInverse is a full gather,
+            // not in-place); everything else decodes straight into the real output slice.
+            bool needsShuffleScratch = shufflePlanes != 0;
+            byte[] decompressTarget = needsShuffleScratch ? _shuffleScratch : buffer;
+            int decompressOffset = needsShuffleScratch ? 0 : destOffset;
+
             int dstCount = blockDsize;
             CompressionResultCode result = decoder.Decompress(
                 _data, (int)(blockDataOffset + srcOffset), (int)blockCsize,
-                buffer, destOffset, ref dstCount);
+                decompressTarget, decompressOffset, ref dstCount);
 
             if (result != CompressionResultCode.Success)
                 throw new InvalidDataException($"Failed to decompress frame {frameIndex} block {b}: {result}");
             if (dstCount != blockDsize)
                 throw new InvalidDataException($"Frame {frameIndex} block {b} decompressed to {dstCount} bytes, expected {blockDsize}.");
+
+            if (deltaStride != 0)
+                BlockFilters.DeltaInverse(buffer.AsSpan(destOffset, blockDsize), deltaStride);
+            else if (needsShuffleScratch)
+                BlockFilters.ShuffleInverse(_shuffleScratch.AsSpan(0, blockDsize), buffer.AsSpan(destOffset, blockDsize), shufflePlanes);
 
             srcOffset += (int)blockCsize;
             destOffset += blockDsize;

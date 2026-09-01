@@ -4,10 +4,11 @@ Status: v1 implemented and round-trip tested (`src/Ndz.Core`, `src/Ndz.Cli`). Co
 against the format author's own reference packer (a Rust implementation, `pack.rs`) on
 2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Corrections
 from the reference packer" below for exactly what changed and why. Compression,
-random-access decompression, and the raw-content dictionary (flags bit 5) are
-implemented. Base-ROM patch mode (flags bit 4), the retired trained-dictionary variant
-(flags bit 2), the pair-container format, and the five filter per-block compression
-modes are all **deferred** — see "Open questions."
+random-access decompression, the raw-content dictionary (flags bit 5), and all five
+per-block filter modes (2026-08-31, see "Filter modes" below) are implemented. Base-ROM
+patch mode (flags bit 4), the retired trained-dictionary variant (flags bit 2), and the
+pair-container format are all **deferred** — see "Open questions" and
+`docs/ndz-remaining-work.md` for the plan.
 
 ## Container layout
 
@@ -125,15 +126,17 @@ questions."
 
 ### Per-block compression mode (`BlockMode`)
 
-Each block's mode byte selects how its bytes were compressed. All 7 values are now
-named and their meaning confirmed - see "Filter modes" under "Open questions" below for
-the full writeup and provenance. **Only `Plain` (1) and `Dict` (0) are implemented
-here** - the five filter transforms (2-6) are named/documented but not yet coded.
-`NdzArchive` fails loudly - naming the exact frame index, block index, and raw mode byte
-- on any other mode, rather than misinterpreting bytes it doesn't understand. This means
-**real `.ndz` files produced by the reference packer or `ndztool.py` may not be fully
-readable by this port yet** whenever a block actually used a filter mode (the common
-case - "the reference tool always packs with filters on").
+Each block's mode byte selects how its bytes were compressed. All 7 values are named,
+confirmed, and **implemented** (2026-08-31, `Ndz.Core.Format.BlockFilters`) - see
+"Filter modes" under "Open questions" below for the transform algorithms and
+`docs/ndz-remaining-work.md` for the write/read integration design. `NdzArchive` still
+fails loudly - naming the exact frame index, block index, and raw mode byte - on a mode
+byte outside the 7 defined values, or `Dict` with no dictionary section present, rather
+than misinterpreting bytes it doesn't understand. Verified in both directions against a
+real `ndztool.py` run on real byte content (not just synthetic fixtures): `NdzWriter`'s
+filter-mode output decodes correctly via `ndztool.py unpack --verify` (sha256-identical
+to the source), and `NdzArchive` correctly decodes a real `ndztool.py`-packed file whose
+mode histogram actually used `plain`/`delta1`/`delta2`/`shuffle2` blocks.
 
 **The mode array's existence is itself conditional on the `Filters` flag (bit 3) - a
 real, confirmed, and now-fixed writer bug lived here.** A frame's per-block mode array
@@ -307,7 +310,7 @@ still do not have `patchbench.py` itself, only those two secondhand sources - no
 contradiction found between them and the black-box WASM probing, but neither is the
 format's real source.
 
-### Filter modes — algorithm confirmed 2026-08-31, not yet implemented
+### Filter modes — algorithm confirmed and implemented 2026-08-31
 
 Confirmed real and in active use since 2026-08-25 (mode values 2-6 observed on real
 ROMs, independent of dictionary use). On 2026-08-31 Mena shared, through the user, her
@@ -342,12 +345,15 @@ distinct mode value — `compress_block_best` records the win via the separate `
 array instead (see "Base-ROM patch mode" below), so the mode byte alone can't
 distinguish a base-window hit from an ordinary plain block.
 
-**Still not implemented in `Ndz.Core`** - only the enum values/meanings are confirmed,
-not the encode/decode transform logic (see `BlockMode`'s own doc comment). `NdzArchive`
-fails loudly (naming the frame/block/mode) on any block using one, rather than
-misinterpreting it - confirmed correct against a real `ndztool.py`-produced file (see
-"Per-block compression mode" above): parses everything up to the first actual
-filter-mode block, then fails there cleanly, exactly as designed.
+**Implemented 2026-08-31** (`Ndz.Core.Format.BlockFilters`, wired into
+`NdzWriter.CompressFrame`'s candidate search and `NdzArchive.GetDecompressedFrame`'s
+mode dispatch - see `docs/ndz-remaining-work.md` for the integration design). Verified
+in both directions against a real `ndztool.py`: our filter-mode output round-trips
+through `ndztool.py unpack --verify` sha256-identical to the source, and `NdzArchive`
+correctly decodes a real `ndztool.py`-packed file whose mode histogram used
+`plain`/`delta1`/`delta2`/`shuffle2` blocks in practice, not just `plain`. `NdzWriter`
+gained an `enableFilters` parameter (default on) mirroring `ndztool.py`'s own
+`--no-filters` opt-out.
 
 ### Dictionary flag split — `RawDictionary` (live) vs. `Dict` (retired)
 

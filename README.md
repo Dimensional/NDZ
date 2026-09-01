@@ -9,15 +9,16 @@ Because every frame decompresses independently, reading any byte range only requ
 decompressing the frame(s) it falls in — not the whole ROM. Verified against a real,
 independent third-party tool (`ndztool.py`), not just internally: this port can pack a
 real ROM and have it read correctly by real tooling, and can read a real `.ndz` file
-correctly up to (but not yet through) its filter-mode blocks. See
+produced by that tooling, filter-mode blocks included. See
 [`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the on-disk format, full
-implementation status, and provenance.
+implementation status, and provenance, and
+[`docs/ndz-remaining-work.md`](docs/ndz-remaining-work.md) for the plan on what's next.
 
 Implemented: compression, random-access decompression, raw-content dictionary support
-(including for dictionaries past zstd's implicit ~8 MiB window default). Understood but
-not yet implemented: the five per-block byte-transform filter modes, base-ROM patch mode
-(confirmed to be windowed dictionary compression against a base ROM, not a binary diff),
-and the pair-container format for shipping a base+patch pair together.
+(including for dictionaries past zstd's implicit ~8 MiB window default), and all five
+per-block byte-transform filter modes. Understood but not yet implemented: base-ROM
+patch mode (confirmed to be windowed dictionary compression against a base ROM, not a
+binary diff) and the pair-container format for shipping a base+patch pair together.
 
 ## Usage
 
