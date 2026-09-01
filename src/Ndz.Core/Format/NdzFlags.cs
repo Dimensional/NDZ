@@ -55,7 +55,8 @@ public enum NdzFlags : uint
     /// chosen), so it always sets this bit too - matching `pack.rs`'s own unconditional
     /// choice, and `ndztool.py`'s default (`--no-filters` is opt-out, not opt-in). The
     /// five actual byte-transform filter modes (<see cref="BlockMode.Delta1"/> etc.)
-    /// this bit's name refers to are not implemented here - see <see cref="BlockMode"/>.
+    /// this bit's name refers to are implemented - see <see cref="BlockMode"/> and
+    /// <see cref="Format.BlockFilters"/>.
     /// </summary>
     Filters = 1u << 3,
 

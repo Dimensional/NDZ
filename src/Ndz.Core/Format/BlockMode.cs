@@ -38,11 +38,12 @@ namespace Ndz.Core.Format;
 /// <see cref="Plain"/> (`plain_cctx.compress(fwd(blk))` in `ndztool.py`), just fed
 /// filtered bytes; there is no separate codec to cross-check.
 ///
-/// <b>Still not implemented here</b> - the enum values/meanings and the transform
-/// algorithms themselves are now fully confirmed (above), but the encode/decode
-/// transform logic isn't coded yet. <see cref="Compression.NdzArchive"/> still fails
-/// loudly with the raw mode byte on anything other than <see cref="Plain"/> or
-/// <see cref="Dict"/>, rather than assuming an unknown mode behaves like either.
+/// All 7 modes are implemented on both sides (see <see cref="Format.BlockFilters"/> for
+/// the transforms, <see cref="Compression.NdzWriter"/> for encode-side selection, and
+/// <see cref="Compression.NdzArchive"/> for decode) and cross-verified bidirectionally
+/// against real `ndztool.py` output. <see cref="Compression.NdzArchive"/> still fails
+/// loudly on any raw mode byte outside 0-6, rather than assuming an unrecognized value
+/// behaves like an existing mode.
 /// </summary>
 public enum BlockMode : byte
 {
