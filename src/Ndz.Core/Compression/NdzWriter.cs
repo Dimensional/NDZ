@@ -21,6 +21,22 @@ namespace Ndz.Core.Compression;
 /// worker thread, mirroring the reference packer's own per-thread-group compressor -
 /// then written to <paramref name="output"/> in order afterward, so the resulting file
 /// is identical regardless of how many threads did the work.
+///
+/// zstd is the only block codec this writer produces, matching both confirmed
+/// references' own packers exactly (`pack.rs`'s own top-of-file comment: "zstd, level
+/// 19, 8k blocks..."; `ndztool.py`'s `pack_ndz_blob` always sets `NDZ_FLAG_ZSTD_BLOCKS`).
+/// The format also has an lz4-coded block variant - `ndztool.py` can still decode one
+/// (`NDZ_FLAG_V2_HIERARCHICAL` set, `NDZ_FLAG_ZSTD_BLOCKS` clear, no filters/dict/base-
+/// patch: `decompress_v2`'s "lz4" codec branch) - but neither reference's own packer
+/// ever produces one; grepped both fully to confirm before writing this. The format
+/// author confirmed (2026-09-01, relayed through the user) this was a real option in an
+/// earlier format iteration ("NDZv1") and a deliberate choice, not an oversight: zstd
+/// level 19 decompresses in ~300us on real DS hardware against a ~330us timeout (a ~10%
+/// margin - "I've been teeter-tottering on the edge," her own words), against lz4/
+/// lz4hc's much safer ~30us - kept as read-only legacy support rather than reinstated
+/// as an active option. Not implemented here either, for the same reason: not something
+/// any confirmed source's packer produces today. See
+/// <see cref="NdzConstants.MaxLevel"/>'s remarks for the full timing numbers.
 /// </summary>
 public static class NdzWriter
 {

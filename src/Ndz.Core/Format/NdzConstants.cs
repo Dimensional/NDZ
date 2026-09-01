@@ -106,6 +106,15 @@ public static class NdzConstants
     /// `NDZ_MAX_LEVEL` and its doc comment - decompression above this zstd level is too
     /// slow for the DSPico to keep up with a cart read. Same refuse-rather-than-ship-a-
     /// broken-file reasoning as <see cref="MaxBlockSize"/>.
+    ///
+    /// This is not a comfortable margin - confirmed directly by the format author
+    /// (2026-09-01, relayed through the user): zstd level 19 decompresses in ~300us,
+    /// against a DS hardware timeout of ~330us - about a 10% margin, not a generous one
+    /// ("I've been teeter-tottering on the edge because I love living recklessly," her
+    /// own words). lz4/lz4hc decompress in ~30us by contrast, a much wider margin, at
+    /// the cost of a worse compression ratio - not currently implemented here (or in
+    /// either confirmed reference's own packer; see <see cref="Compression.NdzWriter"/>'s
+    /// class remarks for what's confirmed vs. not about that).
     /// </summary>
     public const int MaxLevel = 19;
 
