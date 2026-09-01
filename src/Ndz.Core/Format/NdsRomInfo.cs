@@ -20,6 +20,14 @@ public sealed class NdsRomInfo
     /// itself) - see <see cref="NdzConstants.GetBannerContentSize"/> - not a fixed
     /// full-slot copy.
     /// </summary>
+    /// <exception cref="InvalidDataException">
+    /// The banner offset is 0 or points past the end of the ROM. Confirmed against both
+    /// reference implementations (`pack.rs`'s `build_frontmatter`, `ndztool.py`'s
+    /// `build_ndz_frontmatter`) - both hard-refuse to pack such a ROM at all rather than
+    /// degrading to an empty banner, which this method previously did (fixed 2026-08-31,
+    /// a real, confirmed divergence found during a broader audit pass - no test had ever
+    /// exercised this path, and nothing downstream depended on the lenient behavior).
+    /// </exception>
     public static NdsRomInfo FromRom(ReadOnlySpan<byte> rom)
     {
         if (rom.Length < NdzConstants.NdsHeader.HeaderLength)
@@ -28,19 +36,20 @@ public sealed class NdsRomInfo
         uint gameCode = BinaryPrimitives.ReadUInt32LittleEndian(rom.Slice(NdzConstants.NdsHeader.GameCodeOffset, 4));
         uint bannerOffset = BinaryPrimitives.ReadUInt32LittleEndian(rom.Slice(NdzConstants.NdsHeader.BannerOffsetOffset, 4));
 
+        if (bannerOffset == 0 || bannerOffset >= (uint)rom.Length)
+            throw new InvalidDataException($"Invalid bannerOffset 0x{bannerOffset:X} in .nds header - must be nonzero and within the ROM ({rom.Length:N0} bytes).");
+
         var banner = new byte[NdzConstants.BannerSlotLength];
-        if (bannerOffset != 0 && bannerOffset < (uint)rom.Length)
-        {
-            ushort bannerVersion = bannerOffset + 2 <= (uint)rom.Length
-                ? BinaryPrimitives.ReadUInt16LittleEndian(rom.Slice((int)bannerOffset, 2))
-                : (ushort)0;
 
-            int bannerContentSize = NdzConstants.GetBannerContentSize(bannerVersion);
-            int available = (int)Math.Min(bannerContentSize, rom.Length - (long)bannerOffset);
-            available = Math.Min(available, NdzConstants.BannerSlotLength);
+        ushort bannerVersion = bannerOffset + 2 <= (uint)rom.Length
+            ? BinaryPrimitives.ReadUInt16LittleEndian(rom.Slice((int)bannerOffset, 2))
+            : (ushort)0;
 
-            rom.Slice((int)bannerOffset, available).CopyTo(banner);
-        }
+        int bannerContentSize = NdzConstants.GetBannerContentSize(bannerVersion);
+        int available = (int)Math.Min(bannerContentSize, rom.Length - (long)bannerOffset);
+        available = Math.Min(available, NdzConstants.BannerSlotLength);
+
+        rom.Slice((int)bannerOffset, available).CopyTo(banner);
 
         return new NdsRomInfo { GameCode = gameCode, Banner = banner };
     }

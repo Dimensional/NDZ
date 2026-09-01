@@ -36,10 +36,11 @@ public sealed class NdzFrontMatter
     public uint BaseGameCode { get; init; }
 
     /// <summary>
-    /// Base .nds raw header, exactly <see cref="NdzConstants.BaseHeaderLength"/> bytes.
-    /// Only meaningful when <see cref="NdzFlags.BasePatch"/> is set.
+    /// BLAKE2b-8-byte hash of the base .nds's first 0x200 bytes (its header), exactly
+    /// <see cref="NdzConstants.BaseHeaderHashLength"/> bytes. Only meaningful when
+    /// <see cref="NdzFlags.BasePatch"/> is set.
     /// </summary>
-    public byte[] BaseHeader { get; init; } = new byte[NdzConstants.BaseHeaderLength];
+    public byte[] BaseHeaderHash { get; init; } = new byte[NdzConstants.BaseHeaderHashLength];
 
     public bool HasDictionary => DictionaryStoredSize != 0;
 
@@ -50,8 +51,8 @@ public sealed class NdzFrontMatter
             throw new ArgumentException($"Destination must be exactly {NdzConstants.FrontMatterSize} bytes.", nameof(destination));
         if (Banner.Length != NdzConstants.BannerSlotLength)
             throw new InvalidOperationException($"Banner must be exactly {NdzConstants.BannerSlotLength} bytes.");
-        if (BaseHeader.Length != NdzConstants.BaseHeaderLength)
-            throw new InvalidOperationException($"BaseHeader must be exactly {NdzConstants.BaseHeaderLength} bytes.");
+        if (BaseHeaderHash.Length != NdzConstants.BaseHeaderHashLength)
+            throw new InvalidOperationException($"BaseHeaderHash must be exactly {NdzConstants.BaseHeaderHashLength} bytes.");
 
         destination.Clear();
 
@@ -66,10 +67,8 @@ public sealed class NdzFrontMatter
         BinaryPrimitives.WriteUInt32LittleEndian(destination[NdzConstants.DictionaryStoredSizeOffset..], DictionaryStoredSize);
         BinaryPrimitives.WriteUInt32LittleEndian(destination[NdzConstants.BaseOriginalSizeOffset..], BaseOriginalSize);
         BinaryPrimitives.WriteUInt32LittleEndian(destination[NdzConstants.BaseGameCodeOffset..], BaseGameCode);
-        // 0x2420 (u64 unused) is left zeroed - was the old blake2b hash field.
+        BaseHeaderHash.CopyTo(destination.Slice(NdzConstants.BaseHeaderHashOffset, NdzConstants.BaseHeaderHashLength));
         BinaryPrimitives.WriteUInt32LittleEndian(destination[NdzConstants.DictionaryDecompressedSizeOffset..], DictionaryDecompressedSize);
-
-        BaseHeader.CopyTo(destination.Slice(NdzConstants.BaseHeaderOffset, NdzConstants.BaseHeaderLength));
     }
 
     /// <summary>Parses a 16 KB front-matter block, validating the magic and declared size.</summary>
@@ -100,7 +99,7 @@ public sealed class NdzFrontMatter
             BaseOriginalSize = BinaryPrimitives.ReadUInt32LittleEndian(source[NdzConstants.BaseOriginalSizeOffset..]),
             BaseGameCode = BinaryPrimitives.ReadUInt32LittleEndian(source[NdzConstants.BaseGameCodeOffset..]),
             DictionaryDecompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(source[NdzConstants.DictionaryDecompressedSizeOffset..]),
-            BaseHeader = source.Slice(NdzConstants.BaseHeaderOffset, NdzConstants.BaseHeaderLength).ToArray(),
+            BaseHeaderHash = source.Slice(NdzConstants.BaseHeaderHashOffset, NdzConstants.BaseHeaderHashLength).ToArray(),
         };
     }
 }

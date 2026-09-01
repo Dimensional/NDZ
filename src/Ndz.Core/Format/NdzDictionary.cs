@@ -9,10 +9,12 @@ namespace Ndz.Core.Format;
 /// 2026-08-22 - flagged to Nanook (GrindCore.net's maintainer), who fixed it upstream
 /// (native `*BlockWithDict` functions using `ZSTD_compress_usingCDict`/
 /// `ZSTD_decompress_usingDDict`, wired through `ZStdBlock` via
-/// <see cref="Nanook.GrindCore.CompressionOptions.InitProperties"/>). NDZ currently
-/// builds against a local dev build of that fix
-/// (`Dimensional/GrindCore.net`, branch `release/uniquenames-zstddict` - see
-/// `Ndz.Core.csproj`'s `ProjectReference`), not yet released to nuget.
+/// <see cref="Nanook.GrindCore.CompressionOptions.InitProperties"/>). Released to nuget
+/// as GrindCore 0.8.1, then 0.9.0 added the windowLog override
+/// (<see cref="Nanook.GrindCore.CompressionDictionaryOptions.WindowBits"/>) needed for
+/// dictionaries over ~8 MiB - see <see cref="Compression.NdzWriter"/>'s
+/// `ComputeDictionaryWindowBits`. `Ndz.Core.csproj` targets the official
+/// `PackageReference Include="GrindCore" Version="0.9.0"` package.
 /// </summary>
 public sealed class NdzDictionary
 {

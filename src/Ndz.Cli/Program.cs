@@ -48,8 +48,12 @@ static void PrintUsage()
         ndz - NDS ROM <-> seekable-zstd .ndz converter
 
         Usage:
-          ndz compress <in.nds> <out.ndz> [--level 1-22]   Compress a decrypted .nds into .ndz.
-                                                             --level defaults to 19.
+          ndz compress <in.nds> <out.ndz> [--level 1-22] [--dict <file>]
+                                                             Compress a decrypted .nds into .ndz.
+                                                             --level defaults to 19. --dict primes
+                                                             compression with a raw content dictionary
+                                                             (its bytes are stored verbatim in the
+                                                             output too).
           ndz decompress <in.ndz> <out.nds>                 Reconstruct the original .nds.
           ndz info <in.ndz>                                 Print front-matter and seek-table summary.
           ndz verify <in.ndz> <in.nds>                       Decompress and byte-compare against the
@@ -58,15 +62,15 @@ static void PrintUsage()
         Notes:
           - ROMs should be decrypted first; NDZ compresses raw bytes as-is.
           - Base-ROM patch mode (front-matter flags bit 4) is not implemented yet.
-          - Dictionary sections and non-plain per-block compression modes (raw-dictionary,
-            filter transforms) aren't implemented yet; decompress fails with a clear error
-            naming the exact frame/block/mode rather than misreading such files.
+          - The five byte-transform filter modes aren't implemented yet; decompress fails with a
+            clear error naming the exact frame/block/mode rather than misreading such a file.
+            Raw-dictionary mode (Plain/Dict per block) is fully implemented, both directions.
         """);
 }
 
 static int RunCompress(string[] args)
 {
-    string? inPath = null, outPath = null;
+    string? inPath = null, outPath = null, dictPath = null;
     int level = 19;
 
     for (int i = 0; i < args.Length; i++)
@@ -79,6 +83,15 @@ static int RunCompress(string[] args)
                 return 1;
             }
         }
+        else if (args[i] == "--dict")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--dict requires a file path.");
+                return 1;
+            }
+            dictPath = args[i];
+        }
         else if (inPath is null) inPath = args[i];
         else if (outPath is null) outPath = args[i];
         else
@@ -90,7 +103,7 @@ static int RunCompress(string[] args)
 
     if (inPath is null || outPath is null)
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-22]");
+        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-22] [--dict <file>]");
         return 1;
     }
 
@@ -100,8 +113,12 @@ static int RunCompress(string[] args)
         return 1;
     }
 
+    NdzDictionary? dictionary = dictPath is null
+        ? null
+        : new NdzDictionary { Content = File.ReadAllBytes(dictPath) };
+
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level);
+    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary);
     long compressedSize = new FileInfo(outPath).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;

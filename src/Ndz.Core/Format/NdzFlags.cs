@@ -32,7 +32,7 @@ public enum NdzFlags : uint
 
     /// <summary>
     /// Bit 4: this file's frames encode a patch against a base .nds (see the
-    /// BaseOriginalSize/BaseGameCode/BaseHeader front-matter fields) rather than the
+    /// BaseOriginalSize/BaseGameCode/BaseHeaderHash front-matter fields) rather than the
     /// ROM's own bytes. Not implemented - see NdzFrontMatter.Read's remarks.
     /// </summary>
     BasePatch = 1u << 4,

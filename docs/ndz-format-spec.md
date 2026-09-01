@@ -56,10 +56,18 @@ all **deferred** — see "Open questions."
 | 0x2414 | u32 | dictionaryStoredSize | 0 if no dictionary section |
 | 0x2418 | u32 | baseOriginalSize | bit 4 only |
 | 0x241C | u32 | baseGameCode | bit 4 only |
-| 0x2420 | u64 | *(unused)* | was an old blake2b hash |
+| 0x2420 | u64 | baseHeaderHash | bit 4 only - BLAKE2b-8 hash of the base ROM's first 0x200 bytes, checked against the supplied base at decode time |
 | 0x2428 | u32 | dictionaryDecompressedSize | 0 if no dictionary section |
-| 0x2430 | 0x200 | baseHeader | bit 4 only |
-| 0x2630–0x3FFF | — | reserved | zero |
+| 0x242C–0x3FFF | — | reserved | zero |
+
+**Corrected 2026-08-31** against `ndztool.py`'s own complete field-by-field layout
+comment, which lists every defined field and ends at `0x2428` - `0x2420` was previously
+documented here (wrongly) as unused/retired, and a fictional 0x200-byte `baseHeader`
+field was previously documented at `0x2430` (inherited from an early, pre-`pack.rs` spec
+guess that was never corrected, since `pack.rs` itself doesn't implement base-patch at
+all). Neither error affected any file this project has produced or accepted, since
+`BasePatch` support doesn't exist yet either direction - see `NdzConstants.cs`'s remarks
+for the full correction.
 
 Implementation: `Ndz.Core.Format.NdzFrontMatter` (read/write), `NdzConstants` (offsets),
 `NdsRomInfo` (pulls gameCode/banner out of a raw `.nds`).
@@ -337,7 +345,7 @@ models this yet - it sits above the single-`.ndz` level entirely.
 
 ### Base-ROM patch mode (flags bit 4) — mechanism now fully understood, still unimplemented
 
-The bit-4 fields (`baseOriginalSize`, `baseGameCode`, `baseHeader`) record metadata
+The bit-4 fields (`baseOriginalSize`, `baseGameCode`, `baseHeaderHash`) record metadata
 *about* a base ROM, not its content bytes — the base ROM itself must be supplied
 separately at both compress and decompress time, matching the motivating use case (e.g.
 Pokémon Diamond stored as a patch against a Pearl base). **This spec previously guessed

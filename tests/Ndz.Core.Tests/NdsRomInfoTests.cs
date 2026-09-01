@@ -41,4 +41,28 @@ public class NdsRomInfoTests
 
         Assert.Equal(expectedBanner, info.Banner);
     }
+
+    /// <summary>
+    /// Confirmed against both reference implementations (`pack.rs`'s
+    /// `build_frontmatter`, `ndztool.py`'s `build_ndz_frontmatter`): a zero or
+    /// out-of-range bannerOffset is a hard error, not something to silently degrade
+    /// past with an empty banner.
+    /// </summary>
+    [Fact]
+    public void FromRom_ThrowsOnZeroBannerOffset()
+    {
+        byte[] rom = TestRom.Build(0x200 + 0x1000);
+        BitConverter.GetBytes((uint)0).CopyTo(rom, 0x68);
+
+        Assert.Throws<InvalidDataException>(() => NdsRomInfo.FromRom(rom));
+    }
+
+    [Fact]
+    public void FromRom_ThrowsOnBannerOffsetPastEndOfRom()
+    {
+        byte[] rom = TestRom.Build(0x200 + 0x1000);
+        BitConverter.GetBytes((uint)rom.Length).CopyTo(rom, 0x68);
+
+        Assert.Throws<InvalidDataException>(() => NdsRomInfo.FromRom(rom));
+    }
 }

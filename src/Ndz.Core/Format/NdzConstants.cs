@@ -35,10 +35,30 @@ public static class NdzConstants
     public const int DictionaryStoredSizeOffset = 0x2414;
     public const int BaseOriginalSizeOffset = 0x2418;
     public const int BaseGameCodeOffset = 0x241C;
-    public const int UnusedHashOffset = 0x2420;
+
+    /// <summary>
+    /// A BLAKE2b-8-byte hash of the base ROM's first 0x200 bytes (its header), checked
+    /// against the supplied base at decode time. Only meaningful when
+    /// <see cref="NdzFlags.BasePatch"/> is set. Corrected 2026-08-31: previously
+    /// documented (wrongly) as an unused/retired field - `ndztool.py`'s own front-matter
+    /// layout comment confirms it as a live field, "base header hash", not "was an old
+    /// blake2b hash" as this project had guessed before obtaining that source.
+    /// </summary>
+    public const int BaseHeaderHashOffset = 0x2420;
+
+    public const int BaseHeaderHashLength = 8;
+
     public const int DictionaryDecompressedSizeOffset = 0x2428;
-    public const int BaseHeaderOffset = 0x2430;
-    public const int BaseHeaderLength = 0x200;
+
+    // There is no defined field at 0x2430 or beyond in the confirmed real format -
+    // ndztool.py's own front-matter layout comment lists every field and ends at 0x2428
+    // (dictionaryDecompressedSize, 4 bytes, so 0x242C). A previous 0x200-byte
+    // "BaseHeader" (raw base header copy) field once existed here in this project's
+    // model - removed 2026-08-31 as fictional (inherited from an early, pre-`pack.rs`
+    // spec guess, never actually needed since base-patch verification only ever uses
+    // the 8-byte hash above, and never functionally populated since BasePatch write/read
+    // support doesn't exist). Everything from 0x242C to the end of the 16 KiB
+    // front-matter is unstructured reserved space, always zeroed.
 
     /// <summary>
     /// The unit the outer seek table addresses - what the format's ASCII diagram calls
