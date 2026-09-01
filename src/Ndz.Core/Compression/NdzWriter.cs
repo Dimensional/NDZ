@@ -8,9 +8,10 @@ namespace Ndz.Core.Compression;
 /// <summary>
 /// Compresses a raw, decrypted .nds image into the NDZ container: 16 KB front-matter,
 /// an optional verbatim dictionary section, then 128 KB frames (each internally
-/// subdivided into 8 KB blocks with a per-block mode byte - see
-/// <see cref="NdzConstants"/>/<see cref="BlockMode"/>), then a seek-table trailer. No
-/// base-ROM patch mode yet - see <see cref="NdzFlags"/>.
+/// subdivided into 8 KB blocks with a per-block mode byte, and - when a base ROM is
+/// supplied - a per-block base-window offset too - see
+/// <see cref="NdzConstants"/>/<see cref="BlockMode"/>/<see cref="Compression.BaseRomIndex"/>),
+/// then a seek-table trailer.
 ///
 /// Frames are independent (dictionary state aside, which is read-only/shared - see
 /// below), so they're compressed in parallel - one pair of <see cref="ZStdBlock"/>s per
@@ -41,12 +42,29 @@ public static class NdzWriter
     /// still gets a mode byte, since Plain vs. Dict alone already needs one - see
     /// <see cref="NdzFlags.Filters"/>'s remarks.
     /// </param>
-    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
+    /// <param name="baseRom">
+    /// A second, already-decrypted .nds to base-patch <paramref name="rom"/> against
+    /// (see <see cref="NdzFlags.BasePatch"/>/<see cref="Compression.BaseRomIndex"/>) -
+    /// windowed raw-dictionary compression against the base ROM's own content, not a
+    /// binary diff. Every block (full or the frame's short trailing one - unlike
+    /// filters, base-window search has no full-block restriction, matching
+    /// `ndztool.py`'s own `compress_block_best`) is additionally tried against up to 8
+    /// candidate 16 KiB windows into <paramref name="baseRom"/>; a win is tagged
+    /// <see cref="BlockMode.Plain"/> (not a distinct mode value) with the window's
+    /// offset recorded in a second per-block header array. The base ROM itself must be
+    /// supplied again at decode time (<see cref="Compression.NdzArchive.Open"/>'s own
+    /// <c>baseRom</c> parameter) - it is never stored in the output, only its size, game
+    /// code, and an 8-byte BLAKE2b header hash, checked against whatever base is
+    /// supplied at decode time.
+    /// </param>
+    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null)
     {
         ArgumentNullException.ThrowIfNull(rom);
         ArgumentNullException.ThrowIfNull(output);
         if (!output.CanWrite)
             throw new ArgumentException("Output stream must be writable.", nameof(output));
+        if (baseRom != null && baseRom.Length < NdzConstants.NdsHeader.HeaderLength)
+            throw new ArgumentException($"Base ROM is only {baseRom.Length} bytes; too small to be an .nds ROM.", nameof(baseRom));
         if (blockSize <= 0 || (blockSize & (blockSize - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(blockSize), blockSize, "Block size must be a positive power of two.");
         // Hardware ceilings, not preferences - see NdzConstants.MaxBlockSize/MaxLevel's
@@ -81,6 +99,21 @@ public static class NdzWriter
         if (dictionary != null)
             flags |= NdzFlags.RawDictionary;
 
+        BaseRomIndex? baseIndex = null;
+        uint baseOriginalSize = 0, baseGameCode = 0;
+        byte[] baseHeaderHash = new byte[NdzConstants.BaseHeaderHashLength];
+        if (baseRom != null)
+        {
+            flags |= NdzFlags.BasePatch;
+            baseIndex = new BaseRomIndex(baseRom);
+            baseOriginalSize = checked((uint)baseRom.Length);
+            baseGameCode = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                baseRom.AsSpan(NdzConstants.NdsHeader.GameCodeOffset, 4));
+            // BLAKE2b-8 of the base's own first 0x200 bytes (its header) - checked
+            // against whatever base is supplied at decode time, see NdzArchive.Open.
+            baseHeaderHash = Blake2b.Hash(baseRom.AsSpan(0, NdzConstants.NdsHeader.HeaderLength), NdzConstants.BaseHeaderHashLength);
+        }
+
         var frontMatter = new NdzFrontMatter
         {
             OriginalSize = checked((uint)rom.Length),
@@ -90,6 +123,9 @@ public static class NdzWriter
             // The reference packer stores its dictionary uncompressed, so stored == decompressed.
             DictionaryStoredSize = dictionary == null ? 0u : checked((uint)dictionary.Content.Length),
             DictionaryDecompressedSize = dictionary == null ? 0u : checked((uint)dictionary.Content.Length),
+            BaseOriginalSize = baseOriginalSize,
+            BaseGameCode = baseGameCode,
+            BaseHeaderHash = baseHeaderHash,
         };
 
         var frontMatterBytes = new byte[NdzConstants.FrontMatterSize];
@@ -125,7 +161,7 @@ public static class NdzWriter
             {
                 int frameOffset = f * NdzConstants.FrameSize;
                 int frameLength = Math.Min(NdzConstants.FrameSize, rom.Length - frameOffset);
-                (frames[f], seekTable[f]) = CompressFrame(rom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters);
+                (frames[f], seekTable[f]) = CompressFrame(rom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters, baseIndex, level);
                 return threadLocalBlocks;
             },
             localFinally: threadLocalBlocks =>
@@ -140,11 +176,12 @@ public static class NdzWriter
         WriteTrailer(output, seekTable);
     }
 
-    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true)
+    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, NdzDictionary? dictionary = null, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null)
     {
         byte[] rom = File.ReadAllBytes(inputNdsPath);
+        byte[]? baseRom = baseRomPath == null ? null : File.ReadAllBytes(baseRomPath);
         using var output = File.Create(outputNdzPath);
-        Compress(rom, output, level, dictionary, blockSize, enableFilters);
+        Compress(rom, output, level, dictionary, blockSize, enableFilters, baseRom);
     }
 
     /// <summary>
@@ -178,17 +215,21 @@ public static class NdzWriter
 
     /// <summary>
     /// Compresses one frame's worth of ROM bytes into its private
-    /// <c>[u32 csize × nblocks][u8 mode × nblocks][compressed block bytes]</c> layout
-    /// (see the type-level remarks). Every block is compressed plain and, if a
-    /// dictionary is active, also dictionary-primed; a *full* block (not the frame's
-    /// possibly-short trailing one - see <see cref="BlockFilters"/>/<see cref="BlockMode"/>)
-    /// is additionally tried through each of the five filter transforms via the plain
-    /// codec (never dictionary-primed, matching `ndztool.py`'s own
-    /// `compress_block_best`). Whichever candidate compresses smallest wins, tagged
-    /// accordingly.
+    /// <c>[u32 csize × nblocks][u8 mode × nblocks][u32 baseOff × nblocks][compressed
+    /// block bytes]</c> layout (see the type-level remarks). Every block is compressed
+    /// plain and, if a dictionary is active, also dictionary-primed; a *full* block (not
+    /// the frame's possibly-short trailing one - see <see cref="BlockFilters"/>/
+    /// <see cref="BlockMode"/>) is additionally tried through each of the five filter
+    /// transforms via the plain codec (never dictionary-primed, matching `ndztool.py`'s
+    /// own `compress_block_best`). If a base ROM is active, *every* block (no full-block
+    /// restriction here) is also tried against each of its candidate base windows.
+    /// Whichever candidate compresses smallest wins; a base-window win is tagged
+    /// <see cref="BlockMode.Plain"/> (matching the reference exactly - the win is
+    /// distinguished by its recorded `baseOff`, not a mode value) and every other
+    /// candidate is tagged its own mode.
     /// </summary>
     private static (byte[] FrameBytes, SeekTableEntry Entry) CompressFrame(
-        byte[] rom, int frameOffset, int frameLength, int frameIndex, ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters)
+        byte[] rom, int frameOffset, int frameLength, int frameIndex, ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters, BaseRomIndex? baseIndex, CompressionType level)
     {
         int blockCount = (frameLength + blockSize - 1) / blockSize;
         int maxOutputSize = plainBlock.RequiredCompressOutputSize;
@@ -208,6 +249,7 @@ public static class NdzWriter
 
         var blockCsizes = new uint[blockCount];
         var blockModes = new byte[blockCount];
+        var blockBaseOffs = baseIndex == null ? null : new uint[blockCount];
         using var blockData = new MemoryStream();
 
         for (int b = 0; b < blockCount; b++)
@@ -260,16 +302,72 @@ public static class NdzWriter
                 }
             }
 
+            uint baseOff = BaseRomIndex.NoWindowSentinel;
+            if (baseIndex != null)
+            {
+                // No full-block restriction here (unlike filters, above) - matches
+                // ndztool.py's own compress_block_best, which tries base windows for
+                // every block including the frame's short trailing one.
+                ReadOnlySpan<byte> blockSource = rom.AsSpan(blockOffset, blockLength);
+                foreach (int windowOffset in baseIndex.CandidateWindowOffsets(blockSource, blockOffset))
+                {
+                    byte[] window = baseIndex.GetWindow(windowOffset).ToArray();
+                    // A fresh CDict per candidate, matching ndztool.py's own
+                    // `zstd.ZstdCompressor(level=self.level, dict_data=d)` being built
+                    // fresh per call in BaseCtx.compress_with_window - real, expected
+                    // cost, not something to "optimize away" without re-confirming
+                    // parity. No explicit WindowBits: a 16 KiB window is far under the
+                    // implicit ~8 MiB ceiling that only matters for RawDictionary's much
+                    // bigger dictionaries (see ComputeDictionaryWindowBits's remarks) -
+                    // ndztool.py's own compress_with_window skips the override too.
+                    using var candidateBlock = new ZStdBlock(new CompressionOptions { Type = level, BlockSize = blockSize, InitProperties = window });
+                    // Expected to match plainBlock's own bound exactly - no explicit
+                    // WindowBits is set here (unlike RawDictionary's much bigger
+                    // dictionaries, see ComputeDictionaryWindowBits's remarks), and that
+                    // override is specifically what inflates the bound elsewhere. Fail
+                    // loudly rather than silently risk a too-small buffer if that
+                    // assumption is ever wrong for some GrindCore version.
+                    if (candidateBlock.RequiredCompressOutputSize > candidateDstBuffer.Length)
+                    {
+                        throw new InvalidDataException(
+                            $"Base-window compressor's output bound ({candidateBlock.RequiredCompressOutputSize}) exceeds the " +
+                            $"plain compressor's ({candidateDstBuffer.Length}) on frame {frameIndex} block {b} - unexpected, " +
+                            "since no explicit window override is set for base windows.");
+                    }
+
+                    int windowCount = candidateDstBuffer.Length;
+                    CompressionResultCode windowResult = candidateBlock.Compress(rom, blockOffset, blockLength, candidateDstBuffer, 0, ref windowCount);
+                    if (windowResult != CompressionResultCode.Success)
+                        throw new InvalidDataException($"ZStd base-window compression failed on frame {frameIndex} block {b} (offset 0x{windowOffset:X}): {windowResult}");
+
+                    if (windowCount < bestCount)
+                    {
+                        (bestDstBuffer, candidateDstBuffer) = (candidateDstBuffer, bestDstBuffer);
+                        bestCount = windowCount;
+                        mode = BlockMode.Plain; // matches ndztool.py: a base-window win is never a distinct mode value.
+                        baseOff = (uint)windowOffset;
+                    }
+                }
+            }
+            if (blockBaseOffs != null)
+                blockBaseOffs[b] = baseOff;
+
             blockCsizes[b] = (uint)bestCount;
             blockModes[b] = (byte)mode;
             blockData.Write(bestDstBuffer, 0, bestCount);
         }
 
-        var frameBytes = new byte[blockCount * 4 + blockCount + blockData.Length];
+        int baseOffArraySize = blockBaseOffs == null ? 0 : blockCount * 4;
+        var frameBytes = new byte[blockCount * 4 + blockCount + baseOffArraySize + blockData.Length];
         for (int b = 0; b < blockCount; b++)
             BinaryPrimitives.WriteUInt32LittleEndian(frameBytes.AsSpan(b * 4, 4), blockCsizes[b]);
         blockModes.CopyTo(frameBytes.AsSpan(blockCount * 4, blockCount));
-        Buffer.BlockCopy(blockData.GetBuffer(), 0, frameBytes, blockCount * 4 + blockCount, (int)blockData.Length);
+        if (blockBaseOffs != null)
+        {
+            for (int b = 0; b < blockCount; b++)
+                BinaryPrimitives.WriteUInt32LittleEndian(frameBytes.AsSpan(blockCount * 4 + blockCount + b * 4, 4), blockBaseOffs[b]);
+        }
+        Buffer.BlockCopy(blockData.GetBuffer(), 0, frameBytes, blockCount * 4 + blockCount + baseOffArraySize, (int)blockData.Length);
 
         return (frameBytes, new SeekTableEntry((uint)frameBytes.Length, (uint)frameLength));
     }

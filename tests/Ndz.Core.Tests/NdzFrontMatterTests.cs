@@ -64,8 +64,14 @@ public class NdzFrontMatterTests
         Assert.Throws<ArgumentException>(() => NdzFrontMatter.Read(new byte[NdzConstants.FrontMatterSize - 1]));
     }
 
+    /// <summary>
+    /// BasePatch is a real, implemented feature now (see NdzArchive.Open's `baseRom`
+    /// parameter) - unlike TrainedDictionary, parsing a front-matter with it set
+    /// succeeds; whether a specific *open* can honor it is a policy question that needs
+    /// the caller-supplied base ROM this parse-only method never sees.
+    /// </summary>
     [Fact]
-    public void Read_RejectsBasePatchFlag_NotImplementedYet()
+    public void Read_AllowsBasePatchFlag()
     {
         var sample = new NdzFrontMatter
         {
@@ -77,7 +83,8 @@ public class NdzFrontMatterTests
         var buffer = new byte[NdzConstants.FrontMatterSize];
         sample.WriteTo(buffer);
 
-        Assert.Throws<NotSupportedException>(() => NdzFrontMatter.Read(buffer));
+        var parsed = NdzFrontMatter.Read(buffer);
+        Assert.True(parsed.Flags.HasFlag(NdzFlags.BasePatch));
     }
 
     [Fact]

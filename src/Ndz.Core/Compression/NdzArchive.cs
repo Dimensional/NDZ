@@ -29,6 +29,14 @@ public sealed class NdzArchive : IDisposable
     private readonly ZStdBlock _plainBlock;
     private readonly ZStdBlock? _dictBlock;
     private readonly int _blockSize;
+    private readonly byte[]? _baseRom;
+    // One ZStdBlock per distinct base-window offset actually encountered, built lazily
+    // and kept for the archive's lifetime (a windowed dictionary decompressor is
+    // expensive to construct, and the same window offset can recur across many blocks -
+    // matches the same fresh-CDict-per-window cost model as NdzWriter's write side, just
+    // cached here since a reader, unlike the writer, revisits the exact same offset
+    // across independent ReadAt calls too).
+    private readonly Dictionary<uint, ZStdBlock> _baseWindowBlocks = new();
     // Scratch space for Shuffle2/Shuffle4 blocks: ShuffleInverse is a full gather, not
     // an in-place operation, so a shuffled block is decompressed here first, then
     // scattered into the real output buffer. Sized once to the archive's own block size
@@ -44,11 +52,12 @@ public sealed class NdzArchive : IDisposable
     /// <summary>Total decompressed length - the original .nds size.</summary>
     public long Length => FrontMatter.OriginalSize;
 
-    private NdzArchive(byte[] data, NdzFrontMatter frontMatter, SeekTableEntry[] seekTable, long payloadStart, byte[]? dictionary)
+    private NdzArchive(byte[] data, NdzFrontMatter frontMatter, SeekTableEntry[] seekTable, long payloadStart, byte[]? dictionary, byte[]? baseRom)
     {
         _data = data;
         FrontMatter = frontMatter;
         SeekTable = seekTable;
+        _baseRom = baseRom;
         // Read from the file's own flags rather than assuming NdzConstants.BlockSize:
         // that constant is only what NdzWriter always produces by default (matching
         // pack.rs's fixed 8 KiB), but block size is a real per-file variable - ndztool.py's
@@ -69,13 +78,44 @@ public sealed class NdzArchive : IDisposable
         }
     }
 
-    public static NdzArchive Open(byte[] ndzBytes)
+    /// <param name="baseRom">
+    /// The base .nds this file was patched against (see <see cref="NdzFlags.BasePatch"/>/
+    /// <see cref="BaseRomIndex"/>) - required whenever the file's own front-matter has
+    /// `BasePatch` set (verified immediately against the front-matter's own base size/
+    /// gameCode/header-hash fields, matching `ndztool.py`'s own `decode_ndz_blob`
+    /// checks exactly), and otherwise ignored if supplied for a file that doesn't need
+    /// it - also matching the reference's own leniency there.
+    /// </param>
+    public static NdzArchive Open(byte[] ndzBytes, byte[]? baseRom = null)
     {
         ArgumentNullException.ThrowIfNull(ndzBytes);
         if (ndzBytes.Length < NdzConstants.FrontMatterSize + NdzConstants.TrailerFooterSize)
             throw new InvalidDataException("File is too small to be a valid .ndz (shorter than front-matter + trailer footer).");
 
         var frontMatter = NdzFrontMatter.Read(ndzBytes.AsSpan(0, NdzConstants.FrontMatterSize));
+
+        if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch))
+        {
+            if (baseRom == null)
+            {
+                throw new NotSupportedException(
+                    "This .ndz uses base-ROM patch mode (flags bit 4) and needs the base ROM to decode - " +
+                    "pass it as NdzArchive.Open's baseRom parameter.");
+            }
+            if (frontMatter.BaseOriginalSize != (uint)baseRom.Length)
+            {
+                throw new InvalidDataException(
+                    $"Base ROM size mismatch: this .ndz wants a {frontMatter.BaseOriginalSize:N0}-byte base, got {baseRom.Length:N0}.");
+            }
+            if (baseRom.Length < NdzConstants.NdsHeader.HeaderLength)
+                throw new InvalidDataException($"Base ROM is only {baseRom.Length} bytes; too small to be an .nds ROM.");
+            uint baseGameCode = BinaryPrimitives.ReadUInt32LittleEndian(baseRom.AsSpan(NdzConstants.NdsHeader.GameCodeOffset, 4));
+            if (frontMatter.BaseGameCode != baseGameCode)
+                throw new InvalidDataException("Base ROM gameCode mismatch - wrong base ROM.");
+            byte[] baseHeaderHash = Blake2b.Hash(baseRom.AsSpan(0, NdzConstants.NdsHeader.HeaderLength), NdzConstants.BaseHeaderHashLength);
+            if (!frontMatter.BaseHeaderHash.AsSpan().SequenceEqual(baseHeaderHash))
+                throw new InvalidDataException("Base ROM header hash mismatch - wrong base ROM.");
+        }
 
         byte[]? dictionary = null;
         if (frontMatter.HasDictionary)
@@ -119,10 +159,29 @@ public sealed class NdzArchive : IDisposable
                 $"Seek table's total decompressed size ({decompressedTotal}) doesn't match originalSize ({frontMatter.OriginalSize}).");
         }
 
-        return new NdzArchive(ndzBytes, frontMatter, seekTable, payloadStart, dictionary);
+        return new NdzArchive(ndzBytes, frontMatter, seekTable, payloadStart, dictionary, baseRom);
     }
 
-    public static NdzArchive OpenFile(string path) => Open(File.ReadAllBytes(path));
+    public static NdzArchive OpenFile(string path, string? baseRomPath = null) =>
+        Open(File.ReadAllBytes(path), baseRomPath == null ? null : File.ReadAllBytes(baseRomPath));
+
+    /// <summary>
+    /// Reads a file's front-matter and seek table without requiring (or verifying) a
+    /// base ROM, even if <see cref="NdzFlags.BasePatch"/> is set - matches `ndztool.py`'s
+    /// own `cmd_info`, which never needs `--base` since it only ever reads header
+    /// fields, not block content. Not a substitute for <see cref="Open"/> - nothing here
+    /// is decodable (no dictionary content is read either), this is metadata only.
+    /// </summary>
+    public static (NdzFrontMatter FrontMatter, IReadOnlyList<SeekTableEntry> SeekTable) ReadInfo(byte[] ndzBytes)
+    {
+        ArgumentNullException.ThrowIfNull(ndzBytes);
+        if (ndzBytes.Length < NdzConstants.FrontMatterSize + NdzConstants.TrailerFooterSize)
+            throw new InvalidDataException("File is too small to be a valid .ndz (shorter than front-matter + trailer footer).");
+
+        var frontMatter = NdzFrontMatter.Read(ndzBytes.AsSpan(0, NdzConstants.FrontMatterSize));
+        var seekTable = ReadSeekTable(ndzBytes, frontMatter.DictionaryStoredSize, out _);
+        return (frontMatter, seekTable);
+    }
 
     private static SeekTableEntry[] ReadSeekTable(byte[] ndz, uint dictionaryStoredSize, out long payloadStart)
     {
@@ -208,9 +267,12 @@ public sealed class NdzArchive : IDisposable
         int blockCount = (int)((entry.DecompressedSize + _blockSize - 1) / _blockSize);
 
         bool hasModesArray = FrontMatter.Flags.HasFlag(NdzFlags.Filters);
+        bool hasBaseOffArray = FrontMatter.Flags.HasFlag(NdzFlags.BasePatch);
         BlockMode uniformMode = FrontMatter.HasDictionary ? BlockMode.Dict : BlockMode.Plain;
 
-        int headerSize = blockCount * 4 + (hasModesArray ? blockCount : 0);
+        int modesArraySize = hasModesArray ? blockCount : 0;
+        int baseOffArraySize = hasBaseOffArray ? blockCount * 4 : 0;
+        int headerSize = blockCount * 4 + modesArraySize + baseOffArraySize;
         if (headerSize > entry.CompressedSize)
         {
             throw new InvalidDataException(
@@ -220,6 +282,7 @@ public sealed class NdzArchive : IDisposable
         ReadOnlySpan<byte> frameBytes = _data.AsSpan((int)frameStart, (int)entry.CompressedSize);
         ReadOnlySpan<byte> csizeHeader = frameBytes[..(blockCount * 4)];
         ReadOnlySpan<byte> modes = hasModesArray ? frameBytes.Slice(blockCount * 4, blockCount) : default;
+        ReadOnlySpan<byte> baseOffs = hasBaseOffArray ? frameBytes.Slice(blockCount * 4 + modesArraySize, baseOffArraySize) : default;
         ReadOnlySpan<byte> blockData = frameBytes[headerSize..];
 
         var buffer = new byte[entry.DecompressedSize];
@@ -231,16 +294,27 @@ public sealed class NdzArchive : IDisposable
         {
             uint blockCsize = BinaryPrimitives.ReadUInt32LittleEndian(csizeHeader.Slice(b * 4, 4));
             var mode = hasModesArray ? (BlockMode)modes[b] : uniformMode;
+            uint baseOff = hasBaseOffArray ? BinaryPrimitives.ReadUInt32LittleEndian(baseOffs.Slice(b * 4, 4)) : BaseRomIndex.NoWindowSentinel;
             int blockDsize = Math.Min(_blockSize, (int)entry.DecompressedSize - destOffset);
 
-            // Every mode other than Dict decodes through the plain codec - filter modes
-            // included, since the transform is applied to the plaintext before/after a
-            // perfectly ordinary plain zstd block (matches ndztool.py's own
+            // A recorded base-window offset takes priority over the mode byte entirely
+            // (matches ndztool.py's decompress_v2_adv: `if boff != SENTINEL: ... elif
+            // mode == DICT: ... else: ...`) - a base-window win is tagged Plain at write
+            // time (see NdzWriter.CompressFrame's remarks), so the mode byte alone can't
+            // distinguish it; only baseOff can.
+            //
+            // Otherwise every mode other than Dict decodes through the plain codec -
+            // filter modes included, since the transform is applied to the plaintext
+            // before/after a perfectly ordinary plain zstd block (matches
             // decompress_v2_adv: only NDZ_MODE_DICT reaches the dict decompressor).
             int deltaStride = BlockFilters.GetDeltaStride(mode);
             int shufflePlanes = BlockFilters.GetShufflePlaneCount(mode);
             ZStdBlock decoder;
-            if (mode == BlockMode.Dict)
+            if (baseOff != BaseRomIndex.NoWindowSentinel)
+            {
+                decoder = GetOrCreateBaseWindowBlock(baseOff, frameIndex, b);
+            }
+            else if (mode == BlockMode.Dict)
             {
                 if (_dictBlock == null)
                 {
@@ -260,6 +334,16 @@ public sealed class NdzArchive : IDisposable
                     $"Frame {frameIndex} block {b} uses compression mode {(byte)mode}, which isn't a " +
                     "recognized BlockMode value (0-6) - the file may be corrupt or use a format extension " +
                     "this port doesn't know about.");
+            }
+
+            // A base-window hit is never itself a filter - filters and base-patch are
+            // mutually exclusive per block (NdzWriter never applies both), so skip the
+            // delta/shuffle inverse below for it even though `mode` might technically be
+            // Plain either way.
+            if (baseOff != BaseRomIndex.NoWindowSentinel)
+            {
+                deltaStride = 0;
+                shufflePlanes = 0;
             }
 
             if (srcOffset + blockCsize > blockData.Length)
@@ -298,12 +382,44 @@ public sealed class NdzArchive : IDisposable
         return buffer;
     }
 
+    /// <summary>
+    /// A decompressor primed with the base ROM's own bytes at <paramref name="baseOff"/>
+    /// as a one-shot raw-content dictionary - built once per distinct offset and cached
+    /// for the archive's lifetime (see <see cref="_baseWindowBlocks"/>'s remarks).
+    /// </summary>
+    private ZStdBlock GetOrCreateBaseWindowBlock(uint baseOff, int frameIndex, int blockIndex)
+    {
+        if (_baseWindowBlocks.TryGetValue(baseOff, out var cached))
+            return cached;
+
+        if (_baseRom == null)
+        {
+            // NdzArchive.Open already refuses to open a BasePatch file with no baseRom
+            // supplied, so this can only happen if FrontMatter.Flags.BasePatch was
+            // somehow clear while a baseOff array was still present - a corrupt file.
+            throw new InvalidDataException(
+                $"Frame {frameIndex} block {blockIndex} records a base-window offset, but this archive has no base ROM.");
+        }
+        if ((long)baseOff + BaseRomIndex.WindowSize > _baseRom.Length)
+        {
+            throw new InvalidDataException(
+                $"Frame {frameIndex} block {blockIndex}'s base window (offset 0x{baseOff:X}) runs past the end of the base ROM.");
+        }
+
+        byte[] window = _baseRom.AsSpan((int)baseOff, BaseRomIndex.WindowSize).ToArray();
+        var block = new ZStdBlock(new CompressionOptions { Type = CompressionType.Level1, BlockSize = _blockSize, InitProperties = window });
+        _baseWindowBlocks[baseOff] = block;
+        return block;
+    }
+
     public void Dispose()
     {
         if (_disposed)
             return;
         _plainBlock.Dispose();
         _dictBlock?.Dispose();
+        foreach (var block in _baseWindowBlocks.Values)
+            block.Dispose();
         _disposed = true;
     }
 }

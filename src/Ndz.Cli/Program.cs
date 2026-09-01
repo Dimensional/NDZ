@@ -49,7 +49,7 @@ static void PrintUsage()
 
         Usage:
           ndz compress <in.nds> <out.ndz> [--level 1-{NdzConstants.MaxLevel}] [--block-size N]
-                                          [--no-filters] [--dict <file>]
+                                          [--no-filters] [--dict <file>] [--base <base.nds>]
                                                              Compress a decrypted .nds into .ndz.
                                                              --level defaults to 19 and cannot exceed
                                                              {NdzConstants.MaxLevel} - a hardware limit of the
@@ -65,23 +65,30 @@ static void PrintUsage()
                                                              more zstd calls per full block). --dict primes
                                                              compression with a raw content dictionary (its
                                                              bytes are stored verbatim in the output too).
-          ndz decompress <in.ndz> <out.nds>                 Reconstruct the original .nds.
+                                                             --base patches against a second, already-
+                                                             decrypted .nds (windowed dictionary
+                                                             compression against its content, not a binary
+                                                             diff) - the same base must be supplied again
+                                                             to decompress/verify.
+          ndz decompress <in.ndz> <out.nds> [--base <base.nds>]
+                                                             Reconstruct the original .nds. --base is
+                                                             required if the file used base-patch mode.
           ndz info <in.ndz>                                 Print front-matter and seek-table summary.
-          ndz verify <in.ndz> <in.nds>                       Decompress and byte-compare against the
+          ndz verify <in.ndz> <in.nds> [--base <base.nds>]   Decompress and byte-compare against the
                                                              original .nds.
 
         Notes:
           - ROMs should be decrypted first; NDZ compresses raw bytes as-is.
-          - Base-ROM patch mode (front-matter flags bit 4) is not implemented yet.
-          - The five byte-transform filter modes and raw-dictionary mode are both fully
-            implemented, both directions - decompress correctly reads real files from the
-            reference tooling using either.
+          - The five byte-transform filter modes, raw-dictionary mode, and base-ROM patch
+            mode are all fully implemented, both directions - decompress correctly reads
+            real files from the reference tooling using any of them. The pair-container
+            format (bundling a base + patched pair in one file) is not implemented yet.
         """);
 }
 
 static int RunCompress(string[] args)
 {
-    string? inPath = null, outPath = null, dictPath = null;
+    string? inPath = null, outPath = null, dictPath = null, basePath = null;
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
     bool enableFilters = true;
@@ -117,6 +124,15 @@ static int RunCompress(string[] args)
             }
             dictPath = args[i];
         }
+        else if (args[i] == "--base")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--base requires a file path.");
+                return 1;
+            }
+            basePath = args[i];
+        }
         else if (inPath is null) inPath = args[i];
         else if (outPath is null) outPath = args[i];
         else
@@ -151,7 +167,7 @@ static int RunCompress(string[] args)
         : new NdzDictionary { Content = File.ReadAllBytes(dictPath) };
 
     long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary, blockSize, enableFilters);
+    NdzWriter.CompressFile(inPath, outPath, (CompressionType)level, dictionary, blockSize, enableFilters, basePath);
     long compressedSize = new FileInfo(outPath).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;
@@ -161,18 +177,50 @@ static int RunCompress(string[] args)
 
 static int RunDecompress(string[] args)
 {
-    if (args.Length != 2)
+    if (!TryParsePositionalsWithBase(args, 2, out var positionals, out string? basePath, out string? error))
     {
-        Console.Error.WriteLine("Usage: ndz decompress <in.ndz> <out.nds>");
+        Console.Error.WriteLine(error ?? "Usage: ndz decompress <in.ndz> <out.nds> [--base <base.nds>]");
         return 1;
     }
 
-    using var archive = NdzArchive.OpenFile(args[0]);
+    using var archive = NdzArchive.OpenFile(positionals[0], basePath);
     byte[] rom = archive.DecompressAll();
-    File.WriteAllBytes(args[1], rom);
+    File.WriteAllBytes(positionals[1], rom);
 
-    Console.WriteLine($"Wrote '{args[1]}' ({rom.Length:N0} bytes).");
+    Console.WriteLine($"Wrote '{positionals[1]}' ({rom.Length:N0} bytes).");
     return 0;
+}
+
+/// <summary>Parses `expectedPositionals` bare arguments plus an optional `--base <path>`, in any order - shared by decompress/verify.</summary>
+static bool TryParsePositionalsWithBase(string[] args, int expectedPositionals, out List<string> positionals, out string? basePath, out string? error)
+{
+    positionals = new List<string>();
+    basePath = null;
+    error = null;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--base")
+        {
+            if (++i >= args.Length)
+            {
+                error = "--base requires a file path.";
+                return false;
+            }
+            basePath = args[i];
+        }
+        else
+        {
+            positionals.Add(args[i]);
+        }
+    }
+
+    if (positionals.Count != expectedPositionals)
+    {
+        error = $"Expected {expectedPositionals} argument(s), got {positionals.Count}.";
+        return false;
+    }
+    return true;
 }
 
 static int RunInfo(string[] args)
@@ -183,10 +231,9 @@ static int RunInfo(string[] args)
         return 1;
     }
 
-    using var archive = NdzArchive.OpenFile(args[0]);
-    NdzFrontMatter fm = archive.FrontMatter;
+    var (fm, seekTable) = NdzArchive.ReadInfo(File.ReadAllBytes(args[0]));
 
-    long compressedTotal = archive.SeekTable.Sum(e => (long)e.CompressedSize);
+    long compressedTotal = seekTable.Sum(e => (long)e.CompressedSize);
 
     var namedFlags = new[] { NdzFlags.V2, NdzFlags.ZStd, NdzFlags.Filters, NdzFlags.BasePatch, NdzFlags.RawDictionary }
         .Where(f => fm.Flags.HasFlag(f));
@@ -194,28 +241,30 @@ static int RunInfo(string[] args)
     Console.WriteLine($"Game code:          0x{fm.GameCode:X8}");
     Console.WriteLine($"Original size:      {fm.OriginalSize:N0} bytes");
     Console.WriteLine($"Compressed payload: {compressedTotal:N0} bytes");
-    Console.WriteLine($"Frames:             {archive.SeekTable.Count:N0} ({NdzConstants.FrameSize:N0} bytes each, last frame may be shorter)");
+    Console.WriteLine($"Frames:             {seekTable.Count:N0} ({NdzConstants.FrameSize:N0} bytes each, last frame may be shorter)");
     Console.WriteLine($"Block size:         {fm.Flags.GetBlockSize():N0} bytes (from flags)");
     Console.WriteLine($"Flags:              0x{(uint)fm.Flags:X8} [{string.Join(", ", namedFlags)}]");
     Console.WriteLine($"Dictionary:         {(fm.HasDictionary ? $"{fm.DictionaryDecompressedSize:N0} bytes (decompressed)" : "none")}");
+    if (fm.Flags.HasFlag(NdzFlags.BasePatch))
+        Console.WriteLine($"Base ROM:           0x{fm.BaseGameCode:X8}, {fm.BaseOriginalSize:N0} bytes (needed to decompress)");
     return 0;
 }
 
 static int RunVerify(string[] args)
 {
-    if (args.Length != 2)
+    if (!TryParsePositionalsWithBase(args, 2, out var positionals, out string? basePath, out string? error))
     {
-        Console.Error.WriteLine("Usage: ndz verify <in.ndz> <in.nds>");
+        Console.Error.WriteLine(error ?? "Usage: ndz verify <in.ndz> <in.nds> [--base <base.nds>]");
         return 1;
     }
 
-    using var archive = NdzArchive.OpenFile(args[0]);
+    using var archive = NdzArchive.OpenFile(positionals[0], basePath);
     byte[] rebuilt = archive.DecompressAll();
-    byte[] original = File.ReadAllBytes(args[1]);
+    byte[] original = File.ReadAllBytes(positionals[1]);
 
     if (original.AsSpan().SequenceEqual(rebuilt))
     {
-        Console.WriteLine($"PASS: '{args[0]}' decompresses byte-identically to '{args[1]}' ({original.Length:N0} bytes).");
+        Console.WriteLine($"PASS: '{positionals[0]}' decompresses byte-identically to '{positionals[1]}' ({original.Length:N0} bytes).");
         return 0;
     }
 

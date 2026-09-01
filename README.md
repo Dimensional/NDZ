@@ -9,31 +9,37 @@ Because every frame decompresses independently, reading any byte range only requ
 decompressing the frame(s) it falls in — not the whole ROM. Verified against a real,
 independent third-party tool (`ndztool.py`), not just internally: this port can pack a
 real ROM and have it read correctly by real tooling, and can read a real `.ndz` file
-produced by that tooling, filter-mode blocks included. See
+produced by that tooling, filter-mode and base-patch blocks included. See
 [`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the on-disk format, full
 implementation status, and provenance, and
 [`docs/ndz-remaining-work.md`](docs/ndz-remaining-work.md) for the plan on what's next.
 
 Implemented: compression, random-access decompression, raw-content dictionary support
-(including for dictionaries past zstd's implicit ~8 MiB window default), and all five
-per-block byte-transform filter modes. Understood but not yet implemented: base-ROM
-patch mode (confirmed to be windowed dictionary compression against a base ROM, not a
-binary diff) and the pair-container format for shipping a base+patch pair together.
+(including for dictionaries past zstd's implicit ~8 MiB window default), all five
+per-block byte-transform filter modes, and base-ROM patch mode (windowed dictionary
+compression against a base ROM, not a binary diff). Understood but not yet implemented:
+the pair-container format for shipping a base+patch pair together in one file.
 
 ## Usage
 
 ```
-ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--dict <file>]
+ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N]
+                                 [--no-filters] [--dict <file>] [--base <base.nds>]
                                                   Compress a decrypted .nds into .ndz.
                                                   --dict primes compression with a raw
-                                                  content dictionary. --level and
-                                                  --block-size (default 8192, power of
-                                                  two) are capped at the target
-                                                  hardware's decode-speed limits - see
-                                                  "Hardware limits" below.
-ndz decompress <in.ndz> <out.nds>                Reconstruct the original .nds.
-ndz info <in.ndz>                                Print front-matter and seek-table summary.
-ndz verify <in.ndz> <in.nds>                     Decompress and byte-compare against the original.
+                                                  content dictionary. --base patches
+                                                  against a second, already-decrypted
+                                                  .nds. --level and --block-size (default
+                                                  8192, power of two) are capped at the
+                                                  target hardware's decode-speed limits -
+                                                  see "Hardware limits" below.
+ndz decompress <in.ndz> <out.nds> [--base <base.nds>]
+                                                  Reconstruct the original .nds. --base is
+                                                  required if the file used base-patch.
+ndz info <in.ndz>                                Print front-matter and seek-table summary
+                                                  (never needs --base, even for a
+                                                  base-patch file).
+ndz verify <in.ndz> <in.nds> [--base <base.nds>]  Decompress and byte-compare against the original.
 ```
 
 ### Hardware limits

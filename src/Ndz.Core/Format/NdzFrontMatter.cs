@@ -86,8 +86,12 @@ public sealed class NdzFrontMatter
             throw new InvalidDataException($"Unsupported frontMatterSize 0x{frontMatterSize:X}; expected 0x{NdzConstants.FrontMatterSize:X}.");
 
         var flags = (NdzFlags)BinaryPrimitives.ReadUInt32LittleEndian(source[0x000C..]);
-        if (flags.HasFlag(NdzFlags.BasePatch))
-            throw new NotSupportedException("This .ndz uses base-ROM patch mode (flags bit 4), which is not implemented yet.");
+        // BasePatch itself isn't rejected here - unlike TrainedDictionary, it's a real,
+        // implemented feature now (see Compression.NdzArchive.Open's `baseRom`
+        // parameter). Whether a *specific* open can actually honor it (a base ROM was
+        // supplied, and it matches) is a policy decision that needs the caller-supplied
+        // base ROM this parse-only method never sees - that check lives in
+        // NdzArchive.Open instead.
         if (flags.HasFlag(NdzFlags.TrainedDictionary))
         {
             // Explicit, named check rather than relying on NdzArchive.Open's incidental

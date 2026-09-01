@@ -4,11 +4,11 @@ Status: v1 implemented and round-trip tested (`src/Ndz.Core`, `src/Ndz.Cli`). Co
 against the format author's own reference packer (a Rust implementation, `pack.rs`) on
 2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Corrections
 from the reference packer" below for exactly what changed and why. Compression,
-random-access decompression, the raw-content dictionary (flags bit 5), and all five
-per-block filter modes (2026-08-31, see "Filter modes" below) are implemented. Base-ROM
-patch mode (flags bit 4), the retired trained-dictionary variant (flags bit 2), and the
-pair-container format are all **deferred** — see "Open questions" and
-`docs/ndz-remaining-work.md` for the plan.
+random-access decompression, the raw-content dictionary (flags bit 5), all five per-block
+filter modes, and base-ROM patch mode (flags bit 4) are all implemented (2026-08-31, see
+"Filter modes"/"Base-ROM patch mode" below). The retired trained-dictionary variant
+(flags bit 2, not worth implementing) and the pair-container format are what's left —
+see "Open questions" and `docs/ndz-remaining-work.md` for the plan.
 
 ## Container layout
 
@@ -120,9 +120,11 @@ which would have misparsed any file using a different size), and `NdzWriter.Comp
 now takes an optional `blockSize` parameter to produce one. See
 `NonDefaultBlockSizeTests.cs`.
 
-**Bits 2 and 4 are read-but-rejected, not implemented**: `NdzFrontMatter.Read` throws
-`NotSupportedException` if either is set, and `NdzWriter` never sets either. See "Open
-questions."
+**Bit 2 is read-but-rejected, not implemented** (retired, not worth it - see "Open
+questions"): `NdzFrontMatter.Read` throws `NotSupportedException` if it's set, and
+`NdzWriter` never sets it. **Bit 4 (`BasePatch`) is implemented** - see "Base-ROM patch
+mode" below; `NdzFrontMatter.Read` no longer rejects it, `NdzArchive.Open`'s `baseRom`
+parameter does the real (base-ROM-dependent) verification instead.
 
 ### Per-block compression mode (`BlockMode`)
 
@@ -384,7 +386,7 @@ self-contained; the other (the `BasePatch`-flagged one) resolves its base to the
 entry in the same container, not an externally-supplied file. Nothing in `Ndz.Core`
 models this yet - it sits above the single-`.ndz` level entirely.
 
-### Base-ROM patch mode (flags bit 4) — mechanism now fully understood, still unimplemented
+### Base-ROM patch mode (flags bit 4) — implemented 2026-08-31
 
 The bit-4 fields (`baseOriginalSize`, `baseGameCode`, `baseHeaderHash`) record metadata
 *about* a base ROM, not its content bytes — the base ROM itself must be supplied
@@ -404,9 +406,34 @@ algorithm has to be designed or chosen, just the base-ROM window search added to
 existing per-block "try everything, keep the smallest" loop. Base verification is also
 confirmed: the base's declared original size and game code must match exactly, and a
 BLAKE2b-8-byte hash of the base's first `0x200` bytes (its header) must match a value
-stored in the front-matter. Not implemented yet in `Ndz.Core` — a real, non-trivial
-feature (grain-hash index, window candidate search, the extra per-block header array),
-deferred pending direction on priority, not on missing information anymore.
+stored in the front-matter.
+
+**Implemented** (`Ndz.Core.Format.Blake2b` - a from-scratch BLAKE2b, since GrindCore has
+Blake2sp/Blake3 but not BLAKE2b itself, verified against Python's own `hashlib.blake2b`;
+`Ndz.Core.Compression.BaseRomIndex` for the grain-hash index and candidate search;
+integrated into `NdzWriter.CompressFrame`'s existing best-candidate search and
+`NdzArchive`'s decode loop, with a per-window-offset cached decompressor). See
+`docs/ndz-remaining-work.md` for the full integration design. `NdzWriter.Compress`/
+`CompressFile` gained a `baseRom`/`baseRomPath` parameter; `NdzArchive.Open`/`OpenFile`
+gained a `baseRom`/`baseRomPath` parameter, required and verified (size/gameCode/header
+hash) whenever the opened file has `BasePatch` set; the CLI's `compress`/`decompress`/
+`verify` all gained `--base <base.nds>`. `ndz info` deliberately does **not** need a base
+ROM even for a `BasePatch` file (`NdzArchive.ReadInfo`, matching `ndztool.py`'s own
+`cmd_info`) - only actually decoding block content needs it.
+
+Verified in both directions against a real `ndztool.py --base` on real byte content: our
+base-patch output decodes via `ndztool.py unpack --base ... --verify` sha256-identical
+to the source, and a real `ndztool.py --base`-packed file decodes correctly through
+`NdzArchive`/the CLI's `verify` command.
+
+One property worth knowing if base-patch is touched again: the *candidate window set* a
+grain-hash lookup produces is confirmed identical to `BaseCtx.window_candidates`, but
+which up-to-8 subset gets used when more than 8 candidates exist is not, and can't be,
+made to match a specific `ndztool.py` run bit-for-bit - Python's own `set` iteration
+order depends on per-process hash randomization there, so even two `ndztool.py` runs on
+identical input aren't guaranteed to agree with each other. This doesn't affect
+interop - decode only ever needs whichever offset was actually recorded, never a
+specific *selection* of it.
 
 All items above are explicitly out of scope for this v1, not silently dropped: the
 front-matter fields and `NdzFlags`/`BlockMode` values exist and document exactly what's

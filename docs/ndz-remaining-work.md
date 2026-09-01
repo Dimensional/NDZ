@@ -79,7 +79,31 @@ a full ROM (tens of thousands of blocks) this is a real, expected slowdown versu
 today - not a bug, the reference tool pays the identical cost by design ("the reference
 tool always packs with filters on").
 
-## 2. Base-ROM patch mode (flags bit 4)
+**Update 2026-08-31: §2 (base-patch) is done too.** Implemented as designed below
+(`Ndz.Core.Format.Blake2b` - a from-scratch BLAKE2b since GrindCore has Blake2sp/Blake3
+but not BLAKE2b, RFC-7693-and-Python-`hashlib`-verified; `Ndz.Core.Compression.BaseRomIndex`
+for the grain-hash index and candidate search; the base-window candidate loop folded into
+`NdzWriter.CompressFrame`'s existing best/candidate machinery; a cached per-offset
+windowed decompressor in `NdzArchive`). `NdzFrontMatter.Read` no longer rejects
+`BasePatch` outright - that policy (a base ROM must be supplied, and must match) moved to
+`NdzArchive.Open`'s new `baseRom` parameter, verified immediately (size/gameCode/BLAKE2b
+header hash) exactly like `ndztool.py`'s own `decode_ndz_blob`. Also added
+`NdzArchive.ReadInfo` (front-matter + seek table only, no base ROM needed) once it became
+clear `ndz info` would otherwise regress into requiring `--base` just to print a summary -
+`ndztool.py`'s own `cmd_info` never needs it either. `NdzWriter`/`NdzArchive`/the CLI all
+gained a `baseRom`/`--base` parameter.
+
+Verified in both directions against a real `ndztool.py --base` on real byte content:
+our base-patch output decodes via `ndztool.py unpack --base ... --verify`
+sha256-identical to the source, and a real `ndztool.py --base`-packed file (block modes
+in that specific run: 99% delta1, since the synthetic test content happened to be even
+more delta-friendly than base-window-friendly - not a discrepancy, `ndztool.py`'s own
+brute-force selection legitimately preferred it too) decodes correctly through
+`NdzArchive`/the CLI's `verify` command. 114 tests passing (21 new: `Blake2bTests`
+against Python-`hashlib`-cross-checked vectors including a multi-block one,
+`BaseRomIndexTests`, `BasePatchTests`, plus a `ReadInfo` regression test).
+
+## 2. Base-ROM patch mode (flags bit 4) — done
 
 **Confirmed mechanism** (`ndztool.py`'s `BaseCtx`, already summarized in
 `docs/ndz-format-spec.md`'s "Base-ROM patch mode" section): windowed raw-dictionary
@@ -169,8 +193,8 @@ pair otherwise - so this is naturally the last of the three to build.
 ## Suggested build order
 
 1. ~~**Filter modes**~~ - done, see the update note above.
-2. **Base-patch** - the real architectural lift; depends on nothing else here. Next up.
-3. **Pair container** - thin wrapper once (2) exists.
+2. ~~**Base-patch**~~ - done, see the update note above.
+3. **Pair container** - thin wrapper now that (2) exists. Next up.
 
 Each step: implement, unit-test, then cross-check against a real `ndztool.py` run in an
 isolated venv on real byte content (not just synthetic fixtures) in both directions -
