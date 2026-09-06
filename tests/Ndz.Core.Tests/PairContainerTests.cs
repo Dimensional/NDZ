@@ -93,4 +93,102 @@ public class PairContainerTests
 
         Assert.True(output.Length < baseRom.Length + target.Length);
     }
+
+    /// <summary>
+    /// Generalization added 2026-09-06 for packing a whole family of similar ROMs (e.g.
+    /// several regional/version releases of the same game) together - a star topology,
+    /// every target base-patched against the same one shared base, not a chain. Not
+    /// something either reference tool's own pack path does (`ndztool.py`'s `cmd_pack`
+    /// hardcodes `n_roms=2`), but needs no new wire-format bits - the container header's
+    /// own `nRoms` field, and both `ndztool.py`'s and this project's own decode-side
+    /// entry-parsing loops, were already fully generic (see NdzPairWriter's own remarks).
+    /// </summary>
+    [Fact]
+    public void Write_WithMultipleTargets_RoundTripsEveryRomByteIdentical()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 10);
+        byte[][] targets =
+        {
+            TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG1", seed: 11),
+            TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG2", seed: 12),
+            TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG3", seed: 13),
+        };
+
+        using var output = new MemoryStream();
+        NdzPairWriter.Write(output, baseRom, targets);
+
+        var container = NdzPairContainer.Read(output.ToArray());
+        Assert.Equal(4, container.Entries.Count);
+        Assert.Equal(0, container.PlainEntryIndex);
+        Assert.All(container.Entries, e => Assert.Equal(0u, e.Offset % NdzConstants.FrontMatterSize));
+
+        Assert.Equal(baseRom, container.DecompressEntry(0));
+        for (int i = 0; i < targets.Length; i++)
+            Assert.Equal(targets[i], container.DecompressEntry(i + 1));
+    }
+
+    /// <summary>Confirms this is a real star, not a chain - each target's own OpenEntry independently resolves against the shared base (index 0), not against a neighboring target.</summary>
+    [Fact]
+    public void Write_WithMultipleTargets_EachTargetOpensIndependentlyAgainstTheSharedBase()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 20);
+        byte[][] targets =
+        {
+            TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG1", seed: 21),
+            TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG2", seed: 22),
+        };
+
+        using var output = new MemoryStream();
+        NdzPairWriter.Write(output, baseRom, targets);
+        var container = NdzPairContainer.Read(output.ToArray());
+
+        using var archive1 = container.OpenEntry(1);
+        using var archive2 = container.OpenEntry(2);
+        Assert.Equal(targets[0], archive1.DecompressAll());
+        Assert.Equal(targets[1], archive2.DecompressAll());
+    }
+
+    [Fact]
+    public void Write_WithNoTargets_Throws()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 30);
+        using var output = new MemoryStream();
+        Assert.Throws<ArgumentException>(() => NdzPairWriter.Write(output, baseRom, Array.Empty<byte[]>()));
+    }
+
+    [Fact]
+    public void Write_WithMismatchedTargetDictionarySizesCount_Throws()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 31);
+        byte[][] targets = { TestRom.Build(NdzConstants.FrameSize, gameCode: "TRG1", seed: 32) };
+        using var output = new MemoryStream();
+        Assert.Throws<ArgumentException>(() =>
+            NdzPairWriter.Write(output, baseRom, targets, targetDictionarySizes: new int?[] { 0, 0 }));
+    }
+
+    /// <summary>The header's 16 KiB is shared by all entry records - this must be caught with a clear error, not silent corruption, well before it's ever realistic to hit (1023 ROMs at the current 16-byte entry size). Uses empty placeholder ROMs so this fails fast, before any real compression.</summary>
+    [Fact]
+    public void Write_WithTooManyRomsForTheHeader_ThrowsBeforeCompressingAnything()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 40);
+        byte[][] tooManyTargets = Enumerable.Range(0, 2000).Select(_ => Array.Empty<byte>()).ToArray();
+        using var output = new MemoryStream();
+        Assert.Throws<ArgumentException>(() => NdzPairWriter.Write(output, baseRom, tooManyTargets));
+    }
+
+    /// <summary>The single-target overload must still behave exactly like the general N-target one it now delegates to.</summary>
+    [Fact]
+    public void Write_SingleTargetOverload_MatchesGeneralOverloadByteForByte()
+    {
+        byte[] baseRom = TestRom.Build(NdzConstants.FrameSize, gameCode: "BASE", seed: 50);
+        byte[] target = TestRom.Build(NdzConstants.FrameSize, gameCode: "TRGT", seed: 51);
+
+        using var viaSingle = new MemoryStream();
+        NdzPairWriter.Write(viaSingle, baseRom, target);
+
+        using var viaGeneral = new MemoryStream();
+        NdzPairWriter.Write(viaGeneral, baseRom, new[] { target });
+
+        Assert.Equal(viaSingle.ToArray(), viaGeneral.ToArray());
+    }
 }

@@ -106,17 +106,31 @@ static void PrintUsage()
                                                              disk and confirms it decodes to the original
                                                              before reporting success) - matches
                                                              ndztool.py's own --no-verify exactly.
-          ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>
-                                                             Pack a base + base-patched pair into one
-                                                             self-contained file - no external base
-                                                             needed to unpack either side. --raw-dict auto
-                                                             analyzes the base sub-pack and the base-patched
-                                                             target sub-pack SEPARATELY and may recommend
-                                                             different sizes for each (an already-excellent
-                                                             base-window match often makes a dictionary on
-                                                             the patched side pure overhead) - an explicit
-                                                             --raw-dict <size> still applies the same size to
-                                                             both, matching ndztool.py's own --pair-out.
+          ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>
+                                                             Pack a base plus one or more base-patched targets
+                                                             into one self-contained file - no external base
+                                                             needed to unpack any of them. A star topology:
+                                                             every target is patched against the SAME shared
+                                                             base, never against each other - so a whole
+                                                             family of similar ROMs (e.g. every regional/
+                                                             version release of one game) can go in one file,
+                                                             not just a base+one-target pair. Which ROM is the
+                                                             base doesn't need to be picked carefully - dedup
+                                                             is roughly symmetric regardless of which side is
+                                                             "base". Nothing stops packing unrelated ROMs
+                                                             together either - base-patch just finds little or
+                                                             no matching content then, safe but not
+                                                             beneficial. --raw-dict auto analyzes the base and
+                                                             each base-patched target SEPARATELY and may
+                                                             recommend a different size for each (an
+                                                             already-excellent base-window match often makes a
+                                                             dictionary on a patched target pure overhead) -
+                                                             an explicit --raw-dict <size> still applies the
+                                                             same size to all of them, matching ndztool.py's
+                                                             own --pair-out (which only ever packs exactly 2
+                                                             ROMs - the N-target case is our own addition,
+                                                             needing no new wire-format bits since the
+                                                             container's own entry count was already generic).
           ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]
                                                              Print an estimated dictionary-size/result-size
                                                              curve (sampled, not a full pack - seconds, not
@@ -308,6 +322,7 @@ static string EstimateDisclaimer() =>
 static int RunCompress(string[] args)
 {
     string? inPath = null, outPath = null, basePath = null, pairOutPath = null;
+    var positionals = new List<string>();
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
     bool blockSizeAuto = false;
@@ -404,21 +419,35 @@ static int RunCompress(string[] args)
             }
             pairOutPath = args[i];
         }
-        else if (inPath is null) inPath = args[i];
-        else if (outPath is null) outPath = args[i];
-        else
-        {
-            Console.Error.WriteLine($"Unexpected argument: {args[i]}");
-            return 1;
-        }
+        else positionals.Add(args[i]);
     }
 
-    if (inPath is null || (outPath is null && pairOutPath is null))
+    List<string> targetPaths = new();
+    if (pairOutPath != null)
     {
-        Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--frame-size N]");
-        Console.Error.WriteLine("                                       [--no-filters] [--raw-dict <size>] [--base <base.nds>] [--no-verify]");
-        Console.Error.WriteLine("   or: ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>");
-        return 1;
+        // Pair mode takes one or more targets (a star topology: every one of them is
+        // base-patched against the same shared --base, never against each other) - see
+        // NdzPairWriter's own remarks. A single target is the common case (two ROMs in
+        // total); nothing stops packing a whole family of similar releases together
+        // (e.g. every regional/version release of one game) in one file.
+        if (positionals.Count == 0)
+        {
+            Console.Error.WriteLine("Usage: ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>");
+            return 1;
+        }
+        targetPaths = positionals;
+    }
+    else
+    {
+        if (positionals.Count != 2)
+        {
+            Console.Error.WriteLine("Usage: ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N] [--frame-size N]");
+            Console.Error.WriteLine("                                       [--no-filters] [--raw-dict <size>] [--base <base.nds>] [--no-verify]");
+            Console.Error.WriteLine("   or: ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>");
+            return 1;
+        }
+        inPath = positionals[0];
+        outPath = positionals[1];
     }
     if (pairOutPath != null && basePath is null)
     {
@@ -443,36 +472,41 @@ static int RunCompress(string[] args)
     }
 
     byte[]? romForAnalysis = null, baseForAnalysis = null;
+    byte[][]? targetRomsForAnalysis = null;
     if (blockSizeAuto || rawDictAuto)
     {
-        romForAnalysis = File.ReadAllBytes(inPath);
         baseForAnalysis = basePath == null ? null : File.ReadAllBytes(basePath);
+        if (pairOutPath != null)
+            targetRomsForAnalysis = targetPaths.Select(File.ReadAllBytes).ToArray();
+        else
+            romForAnalysis = File.ReadAllBytes(inPath!);
     }
 
-    int? targetDictionarySize = null;
+    int[]? targetDictionarySizes = null;
     if (blockSizeAuto)
     {
         if (pairOutPath != null)
         {
-            // Pair mode: block size is shared by both sub-packs (matches ndztool.py's own
-            // --pair-out, which only ever takes one), so it MUST be scored on their
-            // COMBINED total - not the base ROM's self-contained curve alone. The
-            // base-patch window search always uses a fixed 16 KiB window
-            // (BaseRomIndex.WindowSize/ndztool.py's own NDZ_BASE_WINDOW, confirmed - it
-            // does not grow with block size), so a block bigger than that only ever gets
-            // half-covered by one candidate window - a bigger block can look clearly
-            // better for the self-contained base while badly hurting the base-patched
-            // target at the very same size. See AnalyzePair's own remarks - evaluating
-            // block size from the base alone was a real mistake caught here (a real 256 MB
-            // Pokemon Black/White pair went from 91 MB to 127.6 MB after "helpfully"
-            // auto-picking 32 KiB blocks that way).
-            var pairSweep = BlockSizeAnalyzer.AnalyzePair(baseForAnalysis!, romForAnalysis!, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+            // Pair mode: block size is shared by the base and every target (matches
+            // ndztool.py's own --pair-out, which only ever takes one - and this
+            // project's own N-target generalization keeps that a shared, star-topology
+            // choice too), so it MUST be scored on their COMBINED total - not the base
+            // ROM's self-contained curve alone. The base-patch window search always uses
+            // a fixed 16 KiB window (BaseRomIndex.WindowSize/ndztool.py's own
+            // NDZ_BASE_WINDOW, confirmed - it does not grow with block size), so a block
+            // bigger than that only ever gets half-covered by one candidate window - a
+            // bigger block size can look clearly better for the self-contained base while
+            // badly hurting a base-patched target at the very same size. See
+            // AnalyzePair's own remarks - evaluating block size from the base alone was a
+            // real mistake caught here (a real 256 MB Pokemon Black/White pair went from
+            // 91 MB to 127.6 MB after "helpfully" auto-picking 32 KiB blocks that way).
+            var pairSweep = BlockSizeAnalyzer.AnalyzePair(baseForAnalysis!, targetRomsForAnalysis!, maxDictionarySize: maxDictSize, level: (CompressionType)level);
             blockSize = pairSweep.RecommendedBlockSize;
             rawDictionarySize = pairSweep.RecommendedBaseDictionarySize;
-            targetDictionarySize = pairSweep.RecommendedTargetDictionarySize;
+            targetDictionarySizes = pairSweep.RecommendedTargetDictionarySizes.ToArray();
             rawDictAuto = false;
             Console.WriteLine($"--block-size auto: recommended {FormatSize(blockSize)} " +
-                $"(base dict {FormatSize(rawDictionarySize)}, patched target dict {FormatSize(targetDictionarySize.Value)}).");
+                $"(base dict {FormatSize(rawDictionarySize)}, target dict(s) {string.Join(", ", targetDictionarySizes.Select(x => FormatSize(x)))}).");
         }
         else
         {
@@ -499,17 +533,18 @@ static int RunCompress(string[] args)
     {
         if (pairOutPath != null)
         {
-            // Pair mode: the base sub-pack and the base-patched target sub-pack have very
-            // different dictionary economics (an already-near-perfect base-window match
-            // leaves a dictionary nothing real to win, only its own storage cost to add) -
-            // analyzed independently rather than forcing one shared size on both. See
-            // NdzPairWriter.Write's targetDictionarySize remarks.
+            // Pair mode: the base sub-pack and each base-patched target sub-pack have
+            // very different dictionary economics (an already-near-perfect base-window
+            // match leaves a dictionary nothing real to win, only its own storage cost
+            // to add) - each analyzed independently rather than forcing one shared size
+            // on all of them. See NdzPairWriter.Write's targetDictionarySizes remarks.
             var baseAnalysis = DictionaryAnalyzer.Analyze(baseForAnalysis!, null, maxDictSize, (CompressionType)level, blockSize);
-            var targetAnalysis = DictionaryAnalyzer.Analyze(romForAnalysis!, baseForAnalysis, maxDictSize, (CompressionType)level, blockSize);
             rawDictionarySize = baseAnalysis.RecommendedDictionarySize;
-            targetDictionarySize = targetAnalysis.RecommendedDictionarySize;
+            targetDictionarySizes = targetRomsForAnalysis!
+                .Select(t => DictionaryAnalyzer.Analyze(t, baseForAnalysis, maxDictSize, (CompressionType)level, blockSize).RecommendedDictionarySize)
+                .ToArray();
             Console.WriteLine($"--raw-dict auto: base recommended {FormatSize(rawDictionarySize)}, " +
-                $"patched target recommended {FormatSize(targetDictionarySize.Value)} (cap {FormatSize(maxDictSize)}).");
+                $"target(s) recommended {string.Join(", ", targetDictionarySizes.Select(x => FormatSize(x)))} (cap {FormatSize(maxDictSize)}).");
         }
         else
         {
@@ -522,25 +557,27 @@ static int RunCompress(string[] args)
 
     if (pairOutPath != null)
     {
-        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySize);
-        long baseSize = new FileInfo(basePath!).Length, targetSize = new FileInfo(inPath).Length;
+        int?[]? targetDictionarySizesNullable = targetDictionarySizes?.Select(x => (int?)x).ToArray();
+        NdzPairWriter.WriteFile(pairOutPath, basePath!, targetPaths, (CompressionType)level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySizesNullable);
+        long baseSize = new FileInfo(basePath!).Length;
+        long targetsSize = targetPaths.Sum(p => new FileInfo(p).Length);
         long containerSize = new FileInfo(pairOutPath).Length;
-        double pairRatio = containerSize == 0 ? 0 : (double)(baseSize + targetSize) / containerSize;
-        Console.WriteLine($"Wrote '{pairOutPath}': {baseSize + targetSize:N0} -> {containerSize:N0} bytes ({pairRatio:F3}x).");
+        double pairRatio = containerSize == 0 ? 0 : (double)(baseSize + targetsSize) / containerSize;
+        Console.WriteLine($"Wrote '{pairOutPath}': {baseSize + targetsSize:N0} -> {containerSize:N0} bytes ({pairRatio:F3}x) [1 base + {targetPaths.Count} target(s)].");
 
-        if (!noVerify && !VerifyPairRoundTrip(pairOutPath, basePath!, inPath))
+        if (!noVerify && !VerifyPairRoundTrip(pairOutPath, basePath!, targetPaths))
             return 1;
         return 0;
     }
 
-    long originalSize = new FileInfo(inPath).Length;
-    NdzWriter.CompressFile(inPath, outPath!, (CompressionType)level, blockSize, enableFilters, basePath, rawDictionarySize, frameSize);
+    long originalSize = new FileInfo(inPath!).Length;
+    NdzWriter.CompressFile(inPath!, outPath!, (CompressionType)level, blockSize, enableFilters, basePath, rawDictionarySize, frameSize);
     long compressedSize = new FileInfo(outPath!).Length;
 
     double ratio = originalSize == 0 ? 0 : (double)compressedSize / originalSize;
     Console.WriteLine($"Wrote '{outPath}': {originalSize:N0} -> {compressedSize:N0} bytes ({ratio:P1}).");
 
-    if (!noVerify && !VerifySingleRoundTrip(outPath!, inPath, basePath))
+    if (!noVerify && !VerifySingleRoundTrip(outPath!, inPath!, basePath))
         return 1;
     return 0;
 }
@@ -565,16 +602,27 @@ static bool VerifySingleRoundTrip(string outPath, string inPath, string? basePat
 }
 
 /// <summary>Like <see cref="VerifySingleRoundTrip"/>, but for a pair container: both entries, the patched one resolved against the freshly re-decoded base (not the original base bytes) - matches `ndztool.py`'s own pair-out verify exactly.</summary>
-static bool VerifyPairRoundTrip(string pairOutPath, string basePath, string targetPath)
+/// <summary>Verifies every entry in a (possibly N-way, star-topology) pair container - the shared base plus each target, matched to <paramref name="targetPaths"/> in file order (skipping the plain entry), matching NdzPairWriter's own known layout (base always entry 0, targets 1..N in the given order).</summary>
+static bool VerifyPairRoundTrip(string pairOutPath, string basePath, IReadOnlyList<string> targetPaths)
 {
     var pair = NdzPairContainer.ReadFile(pairOutPath);
-    int targetIndex = pair.Entries.Count == 2 ? 1 - pair.PlainEntryIndex : throw new InvalidDataException($"Expected a 2-entry pair container, got {pair.Entries.Count}.");
+    if (pair.Entries.Count != 1 + targetPaths.Count)
+        throw new InvalidDataException($"Expected a {1 + targetPaths.Count}-entry pair container, got {pair.Entries.Count}.");
 
-    byte[] decodedBase = pair.DecompressEntry(pair.PlainEntryIndex);
-    byte[] decodedTarget = pair.DecompressEntry(targetIndex);
+    bool ok = pair.DecompressEntry(pair.PlainEntryIndex).AsSpan().SequenceEqual(File.ReadAllBytes(basePath));
 
-    bool ok = decodedBase.AsSpan().SequenceEqual(File.ReadAllBytes(basePath))
-        && decodedTarget.AsSpan().SequenceEqual(File.ReadAllBytes(targetPath));
+    int targetIndex = 0;
+    for (int i = 0; i < pair.Entries.Count; i++)
+    {
+        if (i == pair.PlainEntryIndex)
+            continue;
+        bool entryOk = pair.DecompressEntry(i).AsSpan().SequenceEqual(File.ReadAllBytes(targetPaths[targetIndex]));
+        if (!entryOk)
+            Console.WriteLine($"  entry {i} ('{targetPaths[targetIndex]}')    FAILED");
+        ok &= entryOk;
+        targetIndex++;
+    }
+
     Console.WriteLine($"  roundtrip    {(ok ? "OK (byte-exact)" : "FAILED")}");
     return ok;
 }

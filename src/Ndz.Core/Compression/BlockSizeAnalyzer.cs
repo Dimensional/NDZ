@@ -76,18 +76,18 @@ public static class BlockSizeAnalyzer
         };
     }
 
-    public readonly record struct PairCandidate(int BlockSize, DictionaryAnalyzer.Result BaseAnalysis, DictionaryAnalyzer.Result TargetAnalysis)
+    public readonly record struct PairCandidate(int BlockSize, DictionaryAnalyzer.Result BaseAnalysis, IReadOnlyList<DictionaryAnalyzer.Result> TargetAnalyses)
     {
-        /// <summary>The base's own best total plus the base-patched target's best total - what different block sizes are actually compared on in pair mode.</summary>
+        /// <summary>The base's own best total plus every base-patched target's best total, summed - what different block sizes are actually compared on in pair mode (a star topology: one base, one or more targets, all patched against that same base).</summary>
         public long CombinedBestEstimatedTotalSize
         {
             get
             {
                 var b = BaseAnalysis;
-                var t = TargetAnalysis;
-                long baseBest = b.Curve.First(p => p.DictionarySize == b.RecommendedDictionarySize).EstimatedTotalSize;
-                long targetBest = t.Curve.First(p => p.DictionarySize == t.RecommendedDictionarySize).EstimatedTotalSize;
-                return baseBest + targetBest;
+                long total = b.Curve.First(p => p.DictionarySize == b.RecommendedDictionarySize).EstimatedTotalSize;
+                foreach (var t in TargetAnalyses)
+                    total += t.Curve.First(p => p.DictionarySize == t.RecommendedDictionarySize).EstimatedTotalSize;
+                return total;
             }
         }
     }
@@ -97,14 +97,17 @@ public static class BlockSizeAnalyzer
         public required IReadOnlyList<PairCandidate> Candidates { get; init; }
         public required int RecommendedBlockSize { get; init; }
         public required int RecommendedBaseDictionarySize { get; init; }
-        public required int RecommendedTargetDictionarySize { get; init; }
+        /// <summary>One recommended dictionary size per target ROM, in the same order they were passed to <see cref="AnalyzePair"/> - each target's own economics are analyzed independently (see <see cref="DictionaryAnalyzer.Analyze"/>'s pair-mode remarks), they don't affect each other.</summary>
+        public required IReadOnlyList<int> RecommendedTargetDictionarySizes { get; init; }
     }
 
     /// <summary>
-    /// Pair-container-aware version of <see cref="Analyze"/>: picks one block size for
-    /// BOTH sub-packs (matching `ndztool.py`'s own `--pair-out`, which only ever takes
-    /// one), scored on their COMBINED total, not the base ROM's self-contained curve
-    /// alone. That distinction is not cosmetic - the base-patch window search
+    /// Pair-container-aware version of <see cref="Analyze"/>: picks ONE block size shared
+    /// by the base and every target (matching `ndztool.py`'s own `--pair-out`, which only
+    /// ever takes one - and this project's own generalization to more than one target,
+    /// see <see cref="NdzPairWriter"/>, is still a star topology, one shared block size
+    /// for all of it), scored on their COMBINED total, not the base ROM's self-contained
+    /// curve alone. That distinction is not cosmetic - the base-patch window search
     /// (<see cref="BaseRomIndex"/>) always uses a fixed <see cref="BaseRomIndex.WindowSize"/>
     /// (16 KiB, confirmed via `ndztool.py`'s own `NDZ_BASE_WINDOW` constant - `pack.rs`
     /// has no base-patch mode at all, so there's no second opinion to check), which does
@@ -114,10 +117,52 @@ public static class BlockSizeAnalyzer
     /// base-patched one at the very same size. Evaluating block size from the base alone
     /// (an earlier, real mistake here - a full 256 MB real Pokemon Black/White pair
     /// packed 91 MB -> 127.6 MB after "helpfully" auto-picking 32 KiB blocks this way)
-    /// completely misses that interaction, since the base-patched target - normally the
-    /// dominant share of a pair's total size - is exactly what a bigger block quietly
-    /// breaks.
+    /// completely misses that interaction, since the base-patched target(s) - normally
+    /// the dominant share of a pair's total size - are exactly what a bigger block
+    /// quietly breaks.
     /// </summary>
+    public static PairResult AnalyzePair(
+        byte[] baseRom,
+        IReadOnlyList<byte[]> targetRoms,
+        IReadOnlyList<int>? blockSizeCandidates = null,
+        int maxDictionarySize = DictionaryAnalyzer.DefaultMaxDictionarySize,
+        CompressionType level = NdzWriter.DefaultLevel,
+        double sampleFraction = 0.04,
+        int minSampleBytes = 4 * 1024 * 1024,
+        int maxSampleBytes = 16 * 1024 * 1024,
+        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(baseRom);
+        ArgumentNullException.ThrowIfNull(targetRoms);
+        if (targetRoms.Count == 0)
+            throw new ArgumentException("At least one target ROM is required.", nameof(targetRoms));
+        var candidateSizes = (blockSizeCandidates ?? DefaultCandidates).Distinct().OrderBy(x => x).ToArray();
+        if (candidateSizes.Length == 0)
+            throw new ArgumentException("At least one block size candidate is required.", nameof(blockSizeCandidates));
+
+        var candidates = new List<PairCandidate>(candidateSizes.Length);
+        foreach (int blockSize in candidateSizes)
+        {
+            var baseAnalysis = DictionaryAnalyzer.Analyze(baseRom, null, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+            var targetAnalyses = new DictionaryAnalyzer.Result[targetRoms.Count];
+            for (int i = 0; i < targetRoms.Count; i++)
+                targetAnalyses[i] = DictionaryAnalyzer.Analyze(targetRoms[i], baseRom, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+            candidates.Add(new PairCandidate(blockSize, baseAnalysis, targetAnalyses));
+        }
+
+        int recommendedBlockSize = DictionaryAnalyzer.SelectWithinTolerance(candidates, c => c.BlockSize, c => c.CombinedBestEstimatedTotalSize, diminishingReturnsTolerance);
+        var recommended = candidates.First(c => c.BlockSize == recommendedBlockSize);
+
+        return new PairResult
+        {
+            Candidates = candidates,
+            RecommendedBlockSize = recommendedBlockSize,
+            RecommendedBaseDictionarySize = recommended.BaseAnalysis.RecommendedDictionarySize,
+            RecommendedTargetDictionarySizes = recommended.TargetAnalyses.Select(t => t.RecommendedDictionarySize).ToArray(),
+        };
+    }
+
+    /// <summary>Single-target convenience overload - see the general (N-target) <see cref="AnalyzePair"/> overload.</summary>
     public static PairResult AnalyzePair(
         byte[] baseRom,
         byte[] targetRom,
@@ -129,29 +174,7 @@ public static class BlockSizeAnalyzer
         int maxSampleBytes = 16 * 1024 * 1024,
         double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance)
     {
-        ArgumentNullException.ThrowIfNull(baseRom);
         ArgumentNullException.ThrowIfNull(targetRom);
-        var candidateSizes = (blockSizeCandidates ?? DefaultCandidates).Distinct().OrderBy(x => x).ToArray();
-        if (candidateSizes.Length == 0)
-            throw new ArgumentException("At least one block size candidate is required.", nameof(blockSizeCandidates));
-
-        var candidates = new List<PairCandidate>(candidateSizes.Length);
-        foreach (int blockSize in candidateSizes)
-        {
-            var baseAnalysis = DictionaryAnalyzer.Analyze(baseRom, null, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
-            var targetAnalysis = DictionaryAnalyzer.Analyze(targetRom, baseRom, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
-            candidates.Add(new PairCandidate(blockSize, baseAnalysis, targetAnalysis));
-        }
-
-        int recommendedBlockSize = DictionaryAnalyzer.SelectWithinTolerance(candidates, c => c.BlockSize, c => c.CombinedBestEstimatedTotalSize, diminishingReturnsTolerance);
-        var recommended = candidates.First(c => c.BlockSize == recommendedBlockSize);
-
-        return new PairResult
-        {
-            Candidates = candidates,
-            RecommendedBlockSize = recommendedBlockSize,
-            RecommendedBaseDictionarySize = recommended.BaseAnalysis.RecommendedDictionarySize,
-            RecommendedTargetDictionarySize = recommended.TargetAnalysis.RecommendedDictionarySize,
-        };
+        return AnalyzePair(baseRom, new[] { targetRom }, blockSizeCandidates, maxDictionarySize, level, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
     }
 }
