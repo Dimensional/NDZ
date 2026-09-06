@@ -54,6 +54,22 @@ public class NonDefaultBlockSizeTests
         Assert.Equal(rom.AsSpan(2048 - 512, buffer.Length).ToArray(), buffer);
     }
 
+    /// <summary>Proves the 2026-09-06 firmware fix's new ceiling actually works end to end, not just that the check moved - see <see cref="NdzConstants.MaxBlockSize"/>'s remarks.</summary>
+    [Theory]
+    [InlineData(16384)]
+    [InlineData(32768)]
+    public void RoundTrips_WithNewlyAllowedLargerBlocks(int blockSize)
+    {
+        byte[] rom = TestRom.Build(NdzConstants.FrameSize * 2 + blockSize * 3);
+
+        using var output = new MemoryStream();
+        NdzWriter.Compress(rom, output, blockSize: blockSize);
+
+        using var archive = NdzArchive.Open(output.ToArray());
+        Assert.Equal(blockSize, archive.FrontMatter.Flags.GetBlockSize());
+        Assert.Equal(rom, archive.DecompressAll());
+    }
+
     [Fact]
     public void RejectsNonPowerOfTwoBlockSize()
     {
@@ -64,15 +80,18 @@ public class NonDefaultBlockSizeTests
 
     /// <summary>
     /// Hardware ceiling, not a preference - see <see cref="NdzConstants.MaxBlockSize"/>'s
-    /// remarks. Confirmed against `ndztool.py`'s own `--block-size` validation, which
-    /// refuses the same way for the same reason.
+    /// remarks (32 KiB since the 2026-09-06 firmware fix, was 8 KiB - `ndztool.py`'s own
+    /// `--block-size` validation still refuses past the old 8 KiB ceiling since its local
+    /// copy predates that fix, which is why this can no longer cross-check against it
+    /// directly the way <see cref="RejectsCompressionLevelAboveTheHardwareLimit"/> still
+    /// does).
     /// </summary>
     [Fact]
     public void RejectsBlockSizeAboveTheHardwareLimit()
     {
         byte[] rom = TestRom.Build(NdzConstants.FrameSize);
         using var output = new MemoryStream();
-        Assert.Throws<ArgumentOutOfRangeException>(() => NdzWriter.Compress(rom, output, blockSize: 16384));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NdzWriter.Compress(rom, output, blockSize: NdzConstants.MaxBlockSize * 2));
     }
 
     /// <summary>

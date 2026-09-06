@@ -85,7 +85,40 @@ public static class RawDictionaryBuilder
         ArgumentNullException.ThrowIfNull(data);
         if (dictSize <= 0)
             return Array.Empty<byte>();
+        return Pack(data, RankChunks(data), dictSize);
+    }
 
+    /// <summary>
+    /// Builds dictionaries at several target sizes from a single chunking+ranking pass
+    /// over <paramref name="data"/>, each byte-identical to what <see cref="Build"/>
+    /// would produce for the same size on its own - used by
+    /// <see cref="DictionaryAnalyzer"/> so trying a whole size ladder doesn't re-chunk
+    /// and re-hash the ROM (the expensive part) once per candidate. Ranking never
+    /// depends on the target size, only the final greedy pack does, so it's safe to
+    /// share.
+    /// </summary>
+    public static byte[][] BuildLadder(byte[] data, IReadOnlyList<int> dictSizes)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(dictSizes);
+        var ranked = RankChunks(data);
+        var result = new byte[dictSizes.Count][];
+        for (int i = 0; i < dictSizes.Count; i++)
+            result[i] = dictSizes[i] <= 0 ? Array.Empty<byte>() : Pack(data, ranked, dictSizes[i]);
+        return result;
+    }
+
+    /// <summary>
+    /// Content-defined-chunks <paramref name="data"/>, then ranks the duplicate,
+    /// non-constant chunks by <c>(occurrences - 1) * length</c> - the bytes an ideal
+    /// dedup would save - highest value first. Ties (equal value) break by descending
+    /// hash bytes, matching Python's `sorted(...).reverse()` on (value, hash) tuples
+    /// exactly; every entry here has a distinct hash by construction (one per unique
+    /// chunk content), so this fully determines order. Shared by <see cref="Build"/> and
+    /// <see cref="BuildLadder"/> - independent of any target dictionary size.
+    /// </summary>
+    private static List<(int Offset, int Length)> RankChunks(byte[] data)
+    {
         var chunks = ContentDefinedChunks(data);
 
         var counts = new Dictionary<HashKey, int>();
@@ -98,11 +131,6 @@ public static class RawDictionaryBuilder
                 representative[key] = (offset, length);
         }
 
-        // Rank duplicate, non-constant chunks by (occurrences - 1) * length - the bytes
-        // an ideal dedup would save - highest value first. Ties (equal value) break by
-        // descending hash bytes, matching Python's `sorted(...).reverse()` on
-        // (value, hash) tuples exactly; every entry here has a distinct hash by
-        // construction (one per unique chunk content), so this fully determines order.
         var ranked = new List<(long Value, HashKey Key)>();
         foreach (var (key, count) in counts)
         {
@@ -121,11 +149,19 @@ public static class RawDictionaryBuilder
         });
         ranked.Reverse();
 
+        var result = new List<(int Offset, int Length)>(ranked.Count);
+        foreach (var (_, key) in ranked)
+            result.Add(representative[key]);
+        return result;
+    }
+
+    /// <summary>Greedily packs pre-ranked (highest-value-first) chunks up to <paramref name="dictSize"/>, matching `ndztool.py`'s own fill loop exactly.</summary>
+    private static byte[] Pack(byte[] data, List<(int Offset, int Length)> ranked, int dictSize)
+    {
         var parts = new List<(int Offset, int Length)>();
         int total = 0;
-        foreach (var (_, key) in ranked)
+        foreach (var (offset, length) in ranked)
         {
-            var (offset, length) = representative[key];
             if (total + length > dictSize)
                 continue;
             parts.Add((offset, length));

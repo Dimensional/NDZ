@@ -91,15 +91,41 @@ public static class NdzConstants
     public const int BlockSize = 8192;
 
     /// <summary>
-    /// Hardware ceiling, not a preference: confirmed via `ndztool.py`'s own
-    /// `NDZ_MAX_BLOCK_SIZE` and its doc comment - the real target hardware (DSPico)
-    /// decodes on the fly while the console waits on a cart read, and a block bigger
-    /// than this takes too long to fetch AND decompress on a cache miss, freezing the
-    /// console. `ndztool.py` refuses to pack past this rather than produce a file that
-    /// "packs fine and then fails on real hardware" - <see cref="Compression.NdzWriter"/>
-    /// matches that refusal.
+    /// Hardware ceiling, not a preference - the real target hardware (DSPico) decodes on
+    /// the fly while the console waits on a cart read, and a block bigger than this takes
+    /// too long to fetch AND decompress on a cache miss, freezing the console.
+    ///
+    /// **32 KiB, not 8 KiB** - raised 2026-09-06, relayed through the user directly from
+    /// the format author: a firmware bug that capped real blocks at 8 KiB is now fixed,
+    /// and 16/32 KiB blocks are confirmed to work on real hardware. The local copy of
+    /// `reference/mena-patchbench/ndztool.py` still hardcodes its own
+    /// `NDZ_MAX_BLOCK_SIZE = 8192` and refuses to *pack* anything bigger (only in
+    /// `cmd_pack`'s own CLI validation, not the decode path) - that script predates the
+    /// fix and is now stale on this one point specifically, not evidence the fix is
+    /// wrong. Nothing on the decode side needed to change: block size was already read
+    /// per-file from the front-matter's own log2 subfield
+    /// (<see cref="NdzFlagsExtensions.GetBlockSizeLog2"/>), never hardcoded past 8 KiB -
+    /// only this write-side ceiling (here and `NdzWriter`'s own check) was actually
+    /// wrong. <see cref="BlockSize"/>'s own default (8 KiB) is unchanged - the new sizes
+    /// are an option to opt into (see <see cref="Compression.BlockSizeAnalyzer"/> for
+    /// picking one), not a new default.
     /// </summary>
-    public const int MaxBlockSize = 8192;
+    public const int MaxBlockSize = 32 * 1024;
+
+    /// <summary>
+    /// The block sizes the CLI's own `--block-size` menu offers (and all
+    /// <see cref="Compression.BlockSizeAnalyzer"/> ever compares) - the original 8 KiB
+    /// default plus the two newly-allowed sizes, deliberately curated down from "any
+    /// power of two up to <see cref="MaxBlockSize"/>" per the user: a smaller, fixed menu
+    /// avoids ever risking a non-power-of-two mistake at the interaction surface, and
+    /// these three are the ones actually worth trading ratio for real-hardware read
+    /// granularity - nothing in between or below meaningfully helps. This is a curated
+    /// CLI-level choice, not a format or `NdzWriter` restriction: the writer itself still
+    /// accepts any power of two up to <see cref="MaxBlockSize"/> (needed for
+    /// reference-compatibility testing - e.g. `ndztool.py`'s own 4 KiB default, see
+    /// `NonDefaultBlockSizeTests`), this list only narrows what a person picks from.
+    /// </summary>
+    public static readonly IReadOnlyList<int> SupportedBlockSizes = new[] { BlockSize, 16 * 1024, 32 * 1024 };
 
     /// <summary>
     /// Hardware ceiling, not a preference: confirmed via `ndztool.py`'s own

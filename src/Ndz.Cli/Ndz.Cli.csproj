@@ -10,6 +10,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Ndz.Cli</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
 </Project>

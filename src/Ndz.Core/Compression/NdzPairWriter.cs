@@ -22,8 +22,22 @@ public static class NdzPairWriter
     /// parameter), then bundles both into one pair container written to
     /// <paramref name="output"/>.
     /// </summary>
+    /// <param name="targetDictionarySize">
+    /// Dictionary size for the base-patched target sub-pack, if different from
+    /// <paramref name="rawDictionarySize"/> (which is always used for the base sub-pack,
+    /// and for the target too when this is left null). Defaulting both sides to the same
+    /// size matches `ndztool.py`'s own `cmd_pack --pair-out` exactly (it passes one
+    /// `raw_dict_size` to both `pack_ndz_blob` calls) - neither reference has any notion
+    /// of choosing them independently. This split exists only for the CLI's own
+    /// `--raw-dict auto` (see <see cref="DictionaryAnalyzer"/>), which found real savings
+    /// left on the table forcing one shared size on both: a dictionary on the
+    /// already-near-perfectly-base-patched target competes with an excellent base-window
+    /// match and mostly just adds its own storage cost, while the same size helps the
+    /// self-contained base a lot (confirmed on a real Pokemon Black/White pair - see
+    /// docs/ndz-remaining-work.md).
+    /// </param>
     public static void Write(Stream output, byte[] baseRom, byte[] targetRom,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(baseRom);
@@ -33,16 +47,12 @@ public static class NdzPairWriter
         if (baseRom.Length < NdzConstants.NdsHeader.HeaderLength)
             throw new ArgumentException($"Base ROM is only {baseRom.Length} bytes; too small to be an .nds ROM.", nameof(baseRom));
 
-        // rawDictionarySize and frameSize both apply to both sub-packs, matching
-        // ndztool.py's own cmd_pack --pair-out (it passes the same raw_dict_size and
-        // frame_size to both pack_ndz_blob calls) - each ROM gets its own dictionary
-        // derived from its own content, but the same bucketing/dictionary-size choices.
         using var baseStream = new MemoryStream();
         NdzWriter.Compress(baseRom, baseStream, level, blockSize, enableFilters, baseRom: null, rawDictionarySize, frameSize);
         byte[] baseBlob = baseStream.ToArray();
 
         using var targetStream = new MemoryStream();
-        NdzWriter.Compress(targetRom, targetStream, level, blockSize, enableFilters, baseRom: baseRom, rawDictionarySize, frameSize);
+        NdzWriter.Compress(targetRom, targetStream, level, blockSize, enableFilters, baseRom: baseRom, targetDictionarySize ?? rawDictionarySize, frameSize);
         byte[] targetBlob = targetStream.ToArray();
 
         const int align = NdzConstants.FrontMatterSize;
@@ -69,12 +79,12 @@ public static class NdzPairWriter
     }
 
     public static void WriteFile(string outputPath, string baseRomPath, string targetRomPath,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null)
     {
         byte[] baseRom = File.ReadAllBytes(baseRomPath);
         byte[] targetRom = File.ReadAllBytes(targetRomPath);
         using var output = File.Create(outputPath);
-        Write(output, baseRom, targetRom, level, blockSize, enableFilters, rawDictionarySize, frameSize);
+        Write(output, baseRom, targetRom, level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySize);
     }
 
     private static void WriteEntry(byte[] header, int index, uint blobOffset, uint size, uint originalSize, uint gameCode)

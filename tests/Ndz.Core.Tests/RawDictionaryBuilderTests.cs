@@ -142,4 +142,39 @@ public class RawDictionaryBuilderTests
         Assert.Empty(RawDictionaryBuilder.Build(data, 0));
         Assert.Empty(RawDictionaryBuilder.Build(data, -5));
     }
+
+    /// <summary>
+    /// <see cref="RawDictionaryBuilder.BuildLadder"/> shares one chunking+ranking pass
+    /// across a whole size ladder (see <see cref="DictionaryAnalyzer"/>,
+    /// which relies on this for speed) - must still be byte-identical to calling
+    /// <see cref="RawDictionaryBuilder.Build"/> once per size independently.
+    /// </summary>
+    [Fact]
+    public void BuildLadder_MatchesIndependentBuildCallsPerSize()
+    {
+        var data = new byte[8192 * 6];
+        var rng = new Random(42);
+        var repeatedPattern = new byte[8192];
+        rng.NextBytes(repeatedPattern);
+        for (int i = 0; i < 6; i++)
+            repeatedPattern.CopyTo(data, i * 8192);
+
+        int[] sizes = { 0, 4096, 8192, 16384, 32768, 65536 };
+        byte[][] ladder = RawDictionaryBuilder.BuildLadder(data, sizes);
+
+        Assert.Equal(sizes.Length, ladder.Length);
+        for (int i = 0; i < sizes.Length; i++)
+            Assert.Equal(RawDictionaryBuilder.Build(data, sizes[i]), ladder[i]);
+    }
+
+    [Fact]
+    public void BuildLadder_OnRampInput_MatchesIndependentBuildCallsPerSize()
+    {
+        byte[] data = BuildRampInput(100_000);
+        int[] sizes = { 0, 4096, 20000, 65536 };
+        byte[][] ladder = RawDictionaryBuilder.BuildLadder(data, sizes);
+
+        for (int i = 0; i < sizes.Length; i++)
+            Assert.Equal(RawDictionaryBuilder.Build(data, sizes[i]), ladder[i]);
+    }
 }

@@ -18,6 +18,8 @@ static int Run(string[] args)
         {
             case "compress":
                 return RunCompress(args[1..]);
+            case "analyze":
+                return RunAnalyze(args[1..]);
             case "decompress":
                 return RunDecompress(args[1..]);
             case "info":
@@ -55,10 +57,17 @@ static void PrintUsage()
                                                              {NdzConstants.MaxLevel} - a hardware limit of the
                                                              target decoder, not a preference (higher
                                                              levels decompress too slowly). --block-size
-                                                             defaults to {NdzConstants.BlockSize} bytes, must be a power
-                                                             of two, and cannot exceed {NdzConstants.MaxBlockSize} - also a
-                                                             hardware limit (bigger blocks take too long
-                                                             to fetch and decompress on a cache miss).
+                                                             defaults to {NdzConstants.BlockSize} bytes - one of
+                                                             8 KiB/16 KiB/32 KiB, or `auto` to pick from those
+                                                             the same way --raw-dict auto does (see below).
+                                                             Bigger blocks trade away random-access
+                                                             granularity (a whole block must be decompressed
+                                                             to reach any byte in it) for ratio - 16/32 KiB
+                                                             became real options 2026-09-06 after a firmware
+                                                             fix; only these three sizes are offered here (not
+                                                             every power of two up to the hardware's
+                                                             {NdzConstants.MaxBlockSize}-byte ceiling) to keep the
+                                                             choice simple and always a safe one.
                                                              --frame-size (e.g. 128k) defaults to
                                                              {NdzConstants.FrameSize} bytes - the outer seek-table
                                                              bucketing granularity, not a hardware limit (no
@@ -76,6 +85,17 @@ static void PrintUsage()
                                                              implementation ever builds one; there is no
                                                              option to load externally-supplied dictionary
                                                              content, because neither reference has one.
+                                                             --raw-dict auto runs the same sampled estimate
+                                                             as `ndz analyze` internally and packs with
+                                                             whichever size it recommends (see `ndz analyze
+                                                             --help` below); --max-dict caps that search
+                                                             (default 8m, the real PSRAM budget on the target
+                                                             hardware - the recommendation itself already
+                                                             tends to land below that on its own once growing
+                                                             the dictionary further stops being clearly worth
+                                                             it, since spare PSRAM is available to the
+                                                             decompressed-block cache instead), only
+                                                             meaningful with `auto`.
                                                              --base patches against a second, already-
                                                              decrypted .nds (windowed dictionary
                                                              compression against its content, not a binary
@@ -89,7 +109,29 @@ static void PrintUsage()
           ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>
                                                              Pack a base + base-patched pair into one
                                                              self-contained file - no external base
-                                                             needed to unpack either side.
+                                                             needed to unpack either side. --raw-dict auto
+                                                             analyzes the base sub-pack and the base-patched
+                                                             target sub-pack SEPARATELY and may recommend
+                                                             different sizes for each (an already-excellent
+                                                             base-window match often makes a dictionary on
+                                                             the patched side pure overhead) - an explicit
+                                                             --raw-dict <size> still applies the same size to
+                                                             both, matching ndztool.py's own --pair-out.
+          ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]
+                                                             Print an estimated dictionary-size/result-size
+                                                             curve (sampled, not a full pack - seconds, not
+                                                             minutes) and a recommended size, capped at
+                                                             --max-dict (default 8m, see --raw-dict auto
+                                                             above). Without --block-size, prints the FULL
+                                                             grid - every dictionary size at every one of
+                                                             {FormatBlockSizeChoices()} blocks, not just each
+                                                             block size's own winner - then an overall
+                                                             recommendation; pass --block-size N to see just
+                                                             that one size's curve. This is an original
+                                                             heuristic of ours, not reverse-engineered from
+                                                             either reference implementation or ndz-studio's
+                                                             own analyze() - see DictionaryAnalyzer's own
+                                                             remarks for what that means for accuracy.
           ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]
                                                              Reconstruct the original .nds. --base is
                                                              required if the file used base-patch mode
@@ -130,15 +172,151 @@ static bool TryParseSize(string text, out int size)
     return true;
 }
 
+/// <summary>Renders a byte count as whichever of B/KB/MB reads most naturally - used for --raw-dict auto's own summary and `ndz analyze`'s curve, not a wire-format concern.</summary>
+static string FormatSize(long bytes) => bytes switch
+{
+    0 => "none",
+    >= 1024 * 1024 => $"{bytes / (1024.0 * 1024.0):F2} MB",
+    >= 1024 => $"{bytes / 1024.0:F1} KB",
+    _ => $"{bytes} B",
+};
+
+/// <summary>The curated --block-size menu (see <see cref="NdzConstants.SupportedBlockSizes"/>'s remarks), rendered for error/help text.</summary>
+static string FormatBlockSizeChoices() => string.Join(", ", NdzConstants.SupportedBlockSizes.Select(size => FormatSize(size)));
+
+static int RunAnalyze(string[] args)
+{
+    string? inPath = null, basePath = null;
+    int level = 19;
+    int? blockSize = null; // null = sweep NdzConstants.SupportedBlockSizes
+    int maxDictSize = DictionaryAnalyzer.DefaultMaxDictionarySize;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--base")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--base requires a file path.");
+                return 1;
+            }
+            basePath = args[i];
+        }
+        else if (args[i] == "--max-dict")
+        {
+            if (++i >= args.Length || !TryParseSize(args[i], out maxDictSize))
+            {
+                Console.Error.WriteLine("--max-dict requires a size, e.g. 8m.");
+                return 1;
+            }
+        }
+        else if (args[i] == "--level")
+        {
+            if (++i >= args.Length || !int.TryParse(args[i], out level))
+            {
+                Console.Error.WriteLine($"--level requires an integer value (1-{NdzConstants.MaxLevel}).");
+                return 1;
+            }
+        }
+        else if (args[i] == "--block-size")
+        {
+            if (++i >= args.Length || !int.TryParse(args[i], out int parsedBlockSize) || !NdzConstants.SupportedBlockSizes.Contains(parsedBlockSize))
+            {
+                Console.Error.WriteLine($"--block-size must be one of {FormatBlockSizeChoices()} (omit it to compare all of them).");
+                return 1;
+            }
+            blockSize = parsedBlockSize;
+        }
+        else if (inPath is null) inPath = args[i];
+        else
+        {
+            Console.Error.WriteLine($"Unexpected argument: {args[i]}");
+            return 1;
+        }
+    }
+
+    if (inPath is null)
+    {
+        Console.Error.WriteLine("Usage: ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]");
+        return 1;
+    }
+
+    byte[] rom = File.ReadAllBytes(inPath);
+    byte[]? baseRom = basePath == null ? null : File.ReadAllBytes(basePath);
+    string romDescription = basePath == null
+        ? $"'{inPath}' ({rom.Length:N0} bytes), self-dictionary only"
+        : $"'{inPath}' ({rom.Length:N0} bytes) base-patched against '{basePath}'";
+
+    var started = DateTime.UtcNow;
+
+    if (blockSize is int fixedBlockSize)
+    {
+        Console.WriteLine($"Analyzing {romDescription} at {FormatSize(fixedBlockSize)} blocks...");
+        var result = DictionaryAnalyzer.Analyze(rom, baseRom, maxDictSize, (CompressionType)level, fixedBlockSize);
+        PrintDictionaryCurve(result, rom.Length);
+        Console.WriteLine();
+        Console.WriteLine($"Recommended: {FormatSize(result.RecommendedDictionarySize)} dictionary " +
+            $"(sampled {result.SampledBlockCount:N0}/{result.TotalBlockCount:N0} blocks, " +
+            $"analyzed in {(DateTime.UtcNow - started).TotalSeconds:F1}s). {EstimateDisclaimer()}");
+        return 0;
+    }
+
+    Console.WriteLine($"Analyzing {romDescription}, comparing every dictionary size at each of {FormatBlockSizeChoices()} blocks...");
+    var sweep = BlockSizeAnalyzer.Analyze(rom, baseRom, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+
+    // Every combination, not just each block size's own winner - the full block size x
+    // dictionary size grid, since a size that's second-best within one block size can
+    // still matter (e.g. deciding between two close options by hand).
+    foreach (var candidate in sweep.Candidates)
+    {
+        string blockMarker = candidate.BlockSize == sweep.RecommendedBlockSize ? " <- recommended block size" : "";
+        Console.WriteLine();
+        Console.WriteLine($"--- {FormatSize(candidate.BlockSize)} blocks{blockMarker} ---");
+        PrintDictionaryCurve(candidate.DictionaryAnalysis, rom.Length);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"{"block size",12}   {"best dict",12}   {"est. total",14}   est. ratio");
+    foreach (var candidate in sweep.Candidates)
+    {
+        string marker = candidate.BlockSize == sweep.RecommendedBlockSize ? " <- recommended" : "";
+        Console.WriteLine($"{FormatSize(candidate.BlockSize),12}   {FormatSize(candidate.DictionaryAnalysis.RecommendedDictionarySize),12}   " +
+            $"{candidate.BestEstimatedTotalSize,10:N0} B   {(rom.Length == 0 ? 0 : (double)rom.Length / candidate.BestEstimatedTotalSize),8:F2}x{marker}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Recommended: {FormatSize(sweep.RecommendedBlockSize)} blocks, {FormatSize(sweep.RecommendedDictionarySize)} dictionary " +
+        $"(analyzed in {(DateTime.UtcNow - started).TotalSeconds:F1}s). {EstimateDisclaimer()} A bigger block trades away " +
+        "random-access granularity for ratio, same as dictionary size trades away PSRAM - see BlockSizeAnalyzer's remarks.");
+    return 0;
+}
+
+static void PrintDictionaryCurve(DictionaryAnalyzer.Result result, long originalSize)
+{
+    Console.WriteLine($"{"dict size",12}   {"est. total",14}   est. ratio");
+    foreach (var point in result.Curve)
+    {
+        string marker = point.DictionarySize == result.RecommendedDictionarySize ? " <- recommended" : "";
+        Console.WriteLine($"{FormatSize(point.DictionarySize),12}   {point.EstimatedTotalSize,10:N0} B   {point.EstimatedRatio(originalSize),8:F2}x{marker}");
+    }
+}
+
+static string EstimateDisclaimer() =>
+    "This is a sampled ESTIMATE - see DictionaryAnalyzer's remarks; a real pack at these " +
+    "settings will typically do slightly better (filters aren't tried here) and is the only exact number.";
+
 static int RunCompress(string[] args)
 {
     string? inPath = null, outPath = null, basePath = null, pairOutPath = null;
     int level = 19;
     int blockSize = NdzConstants.BlockSize;
+    bool blockSizeAuto = false;
     int frameSize = NdzConstants.FrameSize;
     bool enableFilters = true;
     bool noVerify = false;
     int rawDictionarySize = 0;
+    bool rawDictAuto = false;
+    int maxDictSize = DictionaryAnalyzer.DefaultMaxDictionarySize;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -152,9 +330,18 @@ static int RunCompress(string[] args)
         }
         else if (args[i] == "--block-size")
         {
-            if (++i >= args.Length || !int.TryParse(args[i], out blockSize))
+            if (++i >= args.Length)
             {
-                Console.Error.WriteLine($"--block-size requires an integer value in bytes (power of two, up to {NdzConstants.MaxBlockSize}).");
+                Console.Error.WriteLine($"--block-size requires a value: {FormatBlockSizeChoices()}, or 'auto'.");
+                return 1;
+            }
+            if (string.Equals(args[i], "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                blockSizeAuto = true;
+            }
+            else if (!int.TryParse(args[i], out blockSize) || !NdzConstants.SupportedBlockSizes.Contains(blockSize))
+            {
+                Console.Error.WriteLine($"--block-size must be one of {FormatBlockSizeChoices()}, or 'auto'.");
                 return 1;
             }
         }
@@ -176,9 +363,26 @@ static int RunCompress(string[] args)
         }
         else if (args[i] == "--raw-dict")
         {
-            if (++i >= args.Length || !TryParseSize(args[i], out rawDictionarySize))
+            if (++i >= args.Length)
             {
-                Console.Error.WriteLine("--raw-dict requires a size, e.g. 8m or 512k.");
+                Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
+                return 1;
+            }
+            if (string.Equals(args[i], "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                rawDictAuto = true;
+            }
+            else if (!TryParseSize(args[i], out rawDictionarySize))
+            {
+                Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
+                return 1;
+            }
+        }
+        else if (args[i] == "--max-dict")
+        {
+            if (++i >= args.Length || !TryParseSize(args[i], out maxDictSize))
+            {
+                Console.Error.WriteLine("--max-dict requires a size, e.g. 8m.");
                 return 1;
             }
         }
@@ -230,11 +434,58 @@ static int RunCompress(string[] args)
         Console.Error.WriteLine($"--level must be between 1 and {NdzConstants.MaxLevel} (higher levels decompress too slowly for the target hardware).");
         return 1;
     }
-    if (blockSize <= 0 || (blockSize & (blockSize - 1)) != 0 || blockSize > NdzConstants.MaxBlockSize)
+    if (blockSizeAuto && rawDictionarySize > 0)
     {
-        Console.Error.WriteLine($"--block-size must be a power of two up to {NdzConstants.MaxBlockSize} (bigger blocks take too long to fetch/decompress on the target hardware).");
+        Console.Error.WriteLine("--block-size auto can't be combined with an explicit --raw-dict <size> - " +
+            "use --raw-dict auto (or omit --raw-dict) so both are chosen together, since the best dictionary " +
+            "size depends on which block size gets picked.");
         return 1;
     }
+
+    byte[]? romForAnalysis = null, baseForAnalysis = null;
+    if (blockSizeAuto || rawDictAuto)
+    {
+        romForAnalysis = File.ReadAllBytes(inPath);
+        baseForAnalysis = basePath == null ? null : File.ReadAllBytes(basePath);
+    }
+
+    int? targetDictionarySize = null;
+    if (blockSizeAuto)
+    {
+        if (pairOutPath != null)
+        {
+            // Pair mode: block size is shared by both sub-packs (matches ndztool.py's own
+            // --pair-out, which only ever takes one), so it MUST be scored on their
+            // COMBINED total - not the base ROM's self-contained curve alone. The
+            // base-patch window search always uses a fixed 16 KiB window
+            // (BaseRomIndex.WindowSize/ndztool.py's own NDZ_BASE_WINDOW, confirmed - it
+            // does not grow with block size), so a block bigger than that only ever gets
+            // half-covered by one candidate window - a bigger block can look clearly
+            // better for the self-contained base while badly hurting the base-patched
+            // target at the very same size. See AnalyzePair's own remarks - evaluating
+            // block size from the base alone was a real mistake caught here (a real 256 MB
+            // Pokemon Black/White pair went from 91 MB to 127.6 MB after "helpfully"
+            // auto-picking 32 KiB blocks that way).
+            var pairSweep = BlockSizeAnalyzer.AnalyzePair(baseForAnalysis!, romForAnalysis!, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+            blockSize = pairSweep.RecommendedBlockSize;
+            rawDictionarySize = pairSweep.RecommendedBaseDictionarySize;
+            targetDictionarySize = pairSweep.RecommendedTargetDictionarySize;
+            rawDictAuto = false;
+            Console.WriteLine($"--block-size auto: recommended {FormatSize(blockSize)} " +
+                $"(base dict {FormatSize(rawDictionarySize)}, patched target dict {FormatSize(targetDictionarySize.Value)}).");
+        }
+        else
+        {
+            var blockSizeResult = BlockSizeAnalyzer.Analyze(romForAnalysis!, baseForAnalysis, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+            blockSize = blockSizeResult.RecommendedBlockSize;
+            // Single-file mode already analyzed this exact rom/base/blockSize combination
+            // as part of the sweep above - reuse it instead of analyzing it all over again.
+            rawDictionarySize = blockSizeResult.RecommendedDictionarySize;
+            rawDictAuto = false;
+            Console.WriteLine($"--block-size auto: recommended {FormatSize(blockSize)}.");
+        }
+    }
+
     // Not a hardware limit like block size (no cap, no power-of-two requirement) - just
     // has to be able to hold at least one block. Matches ndztool.py's own
     // `if frame_size < block_size: sys.exit(...)`.
@@ -244,9 +495,34 @@ static int RunCompress(string[] args)
         return 1;
     }
 
+    if (rawDictAuto)
+    {
+        if (pairOutPath != null)
+        {
+            // Pair mode: the base sub-pack and the base-patched target sub-pack have very
+            // different dictionary economics (an already-near-perfect base-window match
+            // leaves a dictionary nothing real to win, only its own storage cost to add) -
+            // analyzed independently rather than forcing one shared size on both. See
+            // NdzPairWriter.Write's targetDictionarySize remarks.
+            var baseAnalysis = DictionaryAnalyzer.Analyze(baseForAnalysis!, null, maxDictSize, (CompressionType)level, blockSize);
+            var targetAnalysis = DictionaryAnalyzer.Analyze(romForAnalysis!, baseForAnalysis, maxDictSize, (CompressionType)level, blockSize);
+            rawDictionarySize = baseAnalysis.RecommendedDictionarySize;
+            targetDictionarySize = targetAnalysis.RecommendedDictionarySize;
+            Console.WriteLine($"--raw-dict auto: base recommended {FormatSize(rawDictionarySize)}, " +
+                $"patched target recommended {FormatSize(targetDictionarySize.Value)} (cap {FormatSize(maxDictSize)}).");
+        }
+        else
+        {
+            var analysis = DictionaryAnalyzer.Analyze(romForAnalysis!, baseForAnalysis, maxDictSize, (CompressionType)level, blockSize);
+            rawDictionarySize = analysis.RecommendedDictionarySize;
+            Console.WriteLine($"--raw-dict auto: recommended {FormatSize(rawDictionarySize)} " +
+                $"(sampled {analysis.SampledBlockCount:N0}/{analysis.TotalBlockCount:N0} blocks, cap {FormatSize(maxDictSize)}).");
+        }
+    }
+
     if (pairOutPath != null)
     {
-        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize, frameSize);
+        NdzPairWriter.WriteFile(pairOutPath, basePath!, inPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySize);
         long baseSize = new FileInfo(basePath!).Length, targetSize = new FileInfo(inPath).Length;
         long containerSize = new FileInfo(pairOutPath).Length;
         double pairRatio = containerSize == 0 ? 0 : (double)(baseSize + targetSize) / containerSize;
