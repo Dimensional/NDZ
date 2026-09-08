@@ -34,6 +34,10 @@ a retired, never-produced trained-dictionary flag not worth building.
   how the per-block compression contest actually works (plain zstd vs. self-dictionary vs.
   base-window vs. filters), walked through on real blocks from a real ROM, plus five things
   an independent port of the format turned up packing real cartridge dumps through it.
+- [**Worth The Bytes**](https://claude.ai/code/artifact/85a909fd-9fe6-4cff-88af-95da5c1e4a6f) —
+  the full dictionary-size/block-size line charts (in the style of ndz-studio's own
+  `analyze()` chart) behind two real `ndz analyze --pair` runs: the Pokémon Black/White
+  pair, and all six Mega Man Star Force regional/version releases packed together.
 
 ## Usage
 
