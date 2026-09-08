@@ -16,8 +16,9 @@ namespace Ndz.Gui.ViewModels;
 
 /// <summary>
 /// The Pack queue: drop or open any number of real .nds/.dsi ROMs - individually, or whole
-/// directory trees - and see them appear as decoded cards (icon/title/id). Base/target
-/// bundle grouping isn't wired up yet - every item is still just a flat queue entry.
+/// directory trees - and see them appear as decoded cards (icon/title/id). Dropping a fresh
+/// file directly onto an existing card's "+" strip (<see cref="AddTargetsAsync"/>) adds it
+/// as that card's patch target instead of a new top-level card.
 /// </summary>
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -48,22 +49,58 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     public async Task AddPathsAsync(IEnumerable<string> paths)
     {
+        List<DecodedRom> decoded = await DecodeAllAsync(paths);
+        foreach (DecodedRom rom in decoded)
+            QueueItems.Add(ToViewModel(rom, RemoveItem));
+
+        if (decoded.Count > 0)
+            RecomputeDuplicates();
+    }
+
+    /// <summary>
+    /// Adds each successfully decoded ROM as a patch target of <paramref name="baseItem"/>
+    /// rather than as a new top-level queue card - what dropping a fresh file onto a
+    /// card's "+" strip does. <paramref name="baseItem"/> is always already a top-level
+    /// queue item; targets are never themselves droppable-onto (see
+    /// <see cref="RomEntryViewModel"/>'s class remarks - the format is a flat star
+    /// topology, not a tree).
+    /// </summary>
+    public async Task AddTargetsAsync(RomEntryViewModel baseItem, IEnumerable<string> paths)
+    {
+        List<DecodedRom> decoded = await DecodeAllAsync(paths);
+        foreach (DecodedRom rom in decoded)
+            baseItem.Targets.Add(ToViewModel(rom, target => RemoveTarget(baseItem, target)));
+
+        if (decoded.Count > 0)
+            RecomputeDuplicates();
+    }
+
+    /// <summary>Single-file convenience wrapper over <see cref="AddPathsAsync"/>, kept for the existing Open-ROM/drop-a-file call sites.</summary>
+    public Task AddRomAsync(string path) => AddPathsAsync([path]);
+
+    /// <summary>
+    /// Shared expand-and-decode pipeline for both <see cref="AddPathsAsync"/> and
+    /// <see cref="AddTargetsAsync"/> - only what happens to a successfully decoded ROM
+    /// afterward (new top-level card vs. a target on an existing one) differs between
+    /// them. Sets <see cref="ErrorMessage"/> itself; callers only need to place the
+    /// results.
+    /// </summary>
+    private async Task<List<DecodedRom>> DecodeAllAsync(IEnumerable<string> paths)
+    {
         SetError(null);
 
         (List<string> romFiles, int skippedNdzCount) = await Task.Run(() => ExpandPaths(paths));
 
+        var decoded = new List<DecodedRom>();
         string? lastError = null;
         foreach (string path in romFiles)
         {
-            (DecodedRom? decoded, string? error) = await Task.Run(() => TryDecode(path));
-            if (decoded is not null)
-                QueueItems.Add(ToViewModel(decoded));
+            (DecodedRom? rom, string? error) = await Task.Run(() => TryDecode(path));
+            if (rom is not null)
+                decoded.Add(rom);
             else
                 lastError = error;
         }
-
-        if (romFiles.Count > 0)
-            RecomputeDuplicates();
 
         if (lastError is not null)
             SetError(lastError);
@@ -71,10 +108,9 @@ public partial class MainWindowViewModel : ViewModelBase
             SetError($"Skipped {skippedNdzCount} .ndz file{(skippedNdzCount == 1 ? "" : "s")} - already-packed containers belong in Examine, not Pack.");
         else if (romFiles.Count == 0)
             SetError("No .nds or .dsi ROMs found in what was dropped.");
-    }
 
-    /// <summary>Single-file convenience wrapper over <see cref="AddPathsAsync"/>, kept for the existing Open-ROM/drop-a-file call sites.</summary>
-    public Task AddRomAsync(string path) => AddPathsAsync([path]);
+        return decoded;
+    }
 
     private static (List<string> RomFiles, int SkippedNdzCount) ExpandPaths(IEnumerable<string> paths)
     {
@@ -123,7 +159,7 @@ public partial class MainWindowViewModel : ViewModelBase
             skippedNdz++;
     }
 
-    private sealed record DecodedRom(string Path, byte[] Rgba, string ShortTitle, string FullTitle, string GameCode, byte UnitCode, byte RomVersion, ushort BannerVersion, long FileSizeBytes);
+    private sealed record DecodedRom(string Path, byte[] Rgba, string ShortTitle, string FullTitle, string GameCode, byte UnitCode, string DestinationLabel, string RegionLockLabel, byte RomVersion, ushort BannerVersion, long FileSizeBytes);
 
     private static (DecodedRom? Decoded, string? Error) TryDecode(string path)
     {
@@ -157,6 +193,8 @@ public partial class MainWindowViewModel : ViewModelBase
                 NdsIcon.DecodeTitle(info.Banner),
                 DecodeGameCode(info.GameCode),
                 info.UnitCode,
+                info.DestinationLabel,
+                info.RegionLockLabel,
                 info.RomVersion,
                 info.BannerVersion,
                 rom.LongLength);
@@ -171,21 +209,29 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private RomEntryViewModel ToViewModel(DecodedRom decoded) => new(
+    private RomEntryViewModel ToViewModel(DecodedRom decoded, Action<RomEntryViewModel> onRemove) => new(
         filePath: decoded.Path,
         icon: ToBitmap(decoded.Rgba),
         shortTitle: decoded.ShortTitle,
         fullTitle: decoded.FullTitle,
         gameCode: decoded.GameCode,
         unitCode: decoded.UnitCode,
+        destinationLabel: decoded.DestinationLabel,
+        regionLockLabel: decoded.RegionLockLabel,
         romVersion: decoded.RomVersion,
         bannerVersion: decoded.BannerVersion,
         fileSizeBytes: decoded.FileSizeBytes,
-        onRemove: RemoveItem);
+        onRemove: onRemove);
 
     private void RemoveItem(RomEntryViewModel item)
     {
         QueueItems.Remove(item);
+        RecomputeDuplicates();
+    }
+
+    private void RemoveTarget(RomEntryViewModel baseItem, RomEntryViewModel target)
+    {
+        baseItem.Targets.Remove(target);
         RecomputeDuplicates();
     }
 
@@ -196,13 +242,20 @@ public partial class MainWindowViewModel : ViewModelBase
     /// GameCode + RomVersion together, not GameCode alone - a re-release (e.g. a Wii U
     /// Virtual Console dump) can share a game code with the original cartridge while
     /// carrying a different RomVersion, and is genuinely different content, not a
-    /// duplicate.
+    /// duplicate. Sweeps every top-level card AND every target nested under it - a target
+    /// dropped onto the wrong base's strip by mistake (including a self-pairing, the same
+    /// ROM dropped onto its own base) is flagged exactly the same way as a top-level
+    /// collision.
     /// </summary>
     private void RecomputeDuplicates()
     {
         var seen = new HashSet<(string GameCode, byte RomVersion)>();
         foreach (RomEntryViewModel item in QueueItems)
+        {
             item.IsDuplicate = !seen.Add((item.GameCode, item.RomVersion));
+            foreach (RomEntryViewModel target in item.Targets)
+                target.IsDuplicate = !seen.Add((target.GameCode, target.RomVersion));
+        }
     }
 
     private void SetError(string? message)

@@ -38,6 +38,26 @@
             <Setter Property="Background" Value="#262A33"/>
             <Setter Property="TextBlock.Foreground" Value="#E5636B"/>
         </Style>
+        <Style Selector="Button.chipx">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="Button.chipx:pointerover /template/ ContentPresenter">
+            <Setter Property="TextBlock.Foreground" Value="#E5636B"/>
+        </Style>
+        <Style Selector="Button.targetstrip">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#363B46"/>
+            <Setter Property="BorderThickness" Value="1.5"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="8,7"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.targetstrip:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#20242D"/>
+        </Style>
     </Window.Styles>
 
     <Grid RowDefinitions="52,*">
@@ -76,7 +96,10 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:RomEntryViewModel">
-                                <Border Width="240" Margin="0,0,14,14" Background="#1C1F26" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="10" Padding="14">
+                                <!-- Tag identifies this as a valid "add as target" drop zone for code-behind's
+                                     drop hit-test - the WHOLE card counts, not just the strip below, so a drop
+                                     doesn't have to land on one thin line to be recognized. -->
+                                <Border Tag="RomCard" Width="240" Margin="0,0,14,14" Background="#1C1F26" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="10" Padding="14" ToolTip.Tip="{Binding TooltipText}">
                                     <StackPanel Spacing="10">
 
                                         <Grid ColumnDefinitions="Auto,*,Auto">
@@ -100,6 +123,33 @@
                                         <Border IsVisible="{Binding IsDuplicate}" Background="#2B1F14" BorderBrush="#E0A94D" BorderThickness="1" CornerRadius="6" Padding="8,5">
                                             <TextBlock Text="Already in queue" Foreground="#E0A94D" FontSize="11" FontWeight="SemiBold"/>
                                         </Border>
+
+                                        <!-- Target chips - this card's patch targets, if any -->
+                                        <ItemsControl ItemsSource="{Binding Targets}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:RomEntryViewModel">
+                                                    <Border Background="#22262F" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8" Padding="5,4" Margin="0,0,6,6" ToolTip.Tip="{Binding TooltipText}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                                            <Border Width="20" Height="20" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="3">
+                                                                <Image Source="{Binding Icon}" Width="16" Height="16" RenderOptions.BitmapInterpolationMode="None"/>
+                                                            </Border>
+                                                            <TextBlock Text="{Binding ShortTitle}" Foreground="#C7CCD4" FontSize="11" MaxWidth="80" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                            <Button Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <!-- Drop a fresh ROM anywhere on this card, or click to browse - both add it as this card's patch target. DataContext here is this card's own RomEntryViewModel (inherited). -->
+                                        <Button Classes="targetstrip" Click="OnAddTargetClicked">
+                                            <TextBlock Text="+ drop a ROM here or click to browse" Foreground="#6B7280" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"/>
+                                        </Button>
 
                                         <TextBlock Text="{Binding PlatformText}" Foreground="#6B7280" FontSize="10.5" TextWrapping="Wrap"/>
                                         <TextBlock Text="{Binding BannerNote}" IsVisible="{Binding HasBannerNote}" Foreground="#6B7280" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap"/>

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -8,8 +10,13 @@ namespace Ndz.Gui.ViewModels;
 
 /// <summary>
 /// One ROM loaded into the Pack queue - a decoded icon/title/id plus enough metadata to
-/// render a card. Just a flat queue entry for now; not yet a base/target bundle member
-/// (that grouping interaction is a follow-up on top of this).
+/// render a card. Doubles as a base when <see cref="Targets"/> is non-empty: the pair
+/// format is a star topology (one base, N base-patched targets, no further nesting), so a
+/// target's own <see cref="Targets"/> is always left empty - nothing adds to it, and the
+/// UI never renders a "+" strip on a target chip in the first place. Grouping only ever
+/// happens by dropping a fresh file from Explorer onto a card's "+" strip (see
+/// <see cref="MainWindowViewModel.AddTargetsAsync"/>) - dragging one already-queued card
+/// onto another isn't a supported gesture.
 /// </summary>
 public partial class RomEntryViewModel : ViewModelBase
 {
@@ -46,19 +53,48 @@ public partial class RomEntryViewModel : ViewModelBase
 
     public bool HasBannerNote => !string.IsNullOrEmpty(BannerNote);
 
+    /// <summary>
+    /// The "USA / Europe / Japan"-style release territory, from the game code's own 4th
+    /// character (see <see cref="Ndz.Core.Format.NdsRomInfo.DestinationLabel"/>) - what
+    /// most people mean by "region". Always present (every game code has a 4th
+    /// character), unlike <see cref="RegionLockText"/>.
+    /// </summary>
+    public string DestinationText { get; }
+
+    /// <summary>
+    /// A different, rarely-relevant hardware field GBATEK happens to also call "Region"
+    /// (see <see cref="Ndz.Core.Format.NdsRomInfo.RegionLockLabel"/>) - already empty
+    /// (from Core) when there's nothing worth claiming, including on any DSi title, where
+    /// the byte is confirmed unreliable.
+    /// </summary>
+    public string RegionLockText { get; }
+
+    public bool HasRegionLock => !string.IsNullOrEmpty(RegionLockText);
+
     public string SourceFileText { get; }
 
     /// <summary>
-    /// True when another queue item already carries the same <see cref="GameCode"/> AND
-    /// <see cref="RomVersion"/>. Recomputed by the owning view model over the whole queue
-    /// after every add/remove - a same-code-and-revision heuristic, not a full-ROM hash
-    /// comparison (cheap, and two files sharing both are effectively always the same
-    /// content) - deliberately NOT keyed on GameCode alone, since a same-code re-release
-    /// (e.g. a Virtual Console dump) can carry a different RomVersion and is genuinely
-    /// different content worth keeping both of.
+    /// A composed multi-line hover summary (full title, platform/region/revision, full
+    /// file path) for the card and chip templates' tooltips - everything the compact card
+    /// truncates away is still one hover away.
+    /// </summary>
+    public string TooltipText { get; }
+
+    /// <summary>
+    /// True when another loaded ROM - anywhere, a top-level card or a target chip nested
+    /// under any base - already carries the same <see cref="GameCode"/> AND
+    /// <see cref="RomVersion"/>. Recomputed over everything currently loaded after every
+    /// add/remove - a same-code-and-revision heuristic, not a full-ROM hash comparison
+    /// (cheap, and two files sharing both are effectively always the same content) -
+    /// deliberately NOT keyed on GameCode alone, since a same-code re-release (e.g. a
+    /// Virtual Console dump) can carry a different RomVersion and is genuinely different
+    /// content worth keeping both of.
     /// </summary>
     [ObservableProperty]
     private bool _isDuplicate;
+
+    /// <summary>This card's patch targets, if any - rendered as small chips, not full cards. Empty for a target itself (see the class remarks).</summary>
+    public ObservableCollection<RomEntryViewModel> Targets { get; } = [];
 
     public RomEntryViewModel(
         string filePath,
@@ -67,6 +103,8 @@ public partial class RomEntryViewModel : ViewModelBase
         string fullTitle,
         string gameCode,
         byte unitCode,
+        string destinationLabel,
+        string regionLockLabel,
         byte romVersion,
         ushort bannerVersion,
         long fileSizeBytes,
@@ -87,8 +125,21 @@ public partial class RomEntryViewModel : ViewModelBase
             _ => $"Unknown platform (0x{unitCode:X2})",
         };
         BannerNote = bannerVersion >= 0x0103 ? "Animated icon (not rendered)" : string.Empty;
+        DestinationText = destinationLabel;
+        RegionLockText = string.IsNullOrEmpty(regionLockLabel) ? string.Empty : $"Region-locked: {regionLockLabel}";
         SourceFileText = $"{Path.GetFileName(filePath)} · {fileSizeBytes / (1024.0 * 1024.0):0.#} MB";
         _onRemove = onRemove;
+
+        var tooltipLines = new List<string>();
+        if (!string.IsNullOrEmpty(fullTitle))
+            tooltipLines.Add(fullTitle);
+        tooltipLines.Add($"{gameCode}{(HasRevision ? " · " + RevisionText : "")} · {PlatformText} · {DestinationText}");
+        if (HasRegionLock)
+            tooltipLines.Add(RegionLockText);
+        if (HasBannerNote)
+            tooltipLines.Add(BannerNote);
+        tooltipLines.Add(filePath);
+        TooltipText = string.Join("\n\n", tooltipLines);
     }
 
     [RelayCommand]
