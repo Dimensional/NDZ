@@ -128,6 +128,36 @@ public static class DictionaryAnalyzer
         ArgumentNullException.ThrowIfNull(rom);
         if (maxDictionarySize < 0)
             throw new ArgumentOutOfRangeException(nameof(maxDictionarySize));
+        int[] ladder = BuildSizeLadder(maxDictionarySize);
+        byte[][] dictionaries = rom.Length == 0 ? Array.Empty<byte[]>() : RawDictionaryBuilder.BuildLadder(rom, ladder);
+        return AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries);
+    }
+
+    /// <summary>
+    /// Same as <see cref="Analyze"/>, but takes an already-built <paramref name="ladder"/>/
+    /// <paramref name="dictionaries"/> pair instead of building them from
+    /// <paramref name="rom"/> itself - <see cref="RawDictionaryBuilder.BuildLadder"/>'s
+    /// content-defined-chunking + ranking pass scans the WHOLE rom and depends only on
+    /// its bytes, never on <paramref name="blockSize"/>, so a caller comparing several
+    /// block sizes for the same ROM (<see cref="BlockSizeAnalyzer"/>) can build it once
+    /// and reuse it across every candidate instead of redundantly re-chunking the same
+    /// ROM once per block size. <paramref name="dictionaries"/> must be exactly what
+    /// <c>RawDictionaryBuilder.BuildLadder(rom, ladder)</c> would itself produce - this is
+    /// an internal, trusted-caller entry point (only <see cref="BlockSizeAnalyzer"/> calls
+    /// it today), not a public safety-checked one.
+    /// </summary>
+    internal static Result AnalyzeCore(
+        byte[] rom,
+        byte[]? baseRom,
+        CompressionType level,
+        int blockSize,
+        double sampleFraction,
+        int minSampleBytes,
+        int maxSampleBytes,
+        double diminishingReturnsTolerance,
+        int[] ladder,
+        byte[][] dictionaries)
+    {
         if (rom.Length == 0)
         {
             return new Result
@@ -141,9 +171,6 @@ public static class DictionaryAnalyzer
 
         int totalBlocks = (rom.Length + blockSize - 1) / blockSize;
         int[] sampleIndexes = SampleBlockIndexes(totalBlocks, rom.Length, blockSize, sampleFraction, minSampleBytes, maxSampleBytes);
-
-        int[] ladder = BuildSizeLadder(maxDictionarySize);
-        byte[][] dictionaries = RawDictionaryBuilder.BuildLadder(rom, ladder);
 
         BaseRomIndex? baseIndex = baseRom == null ? null : new BaseRomIndex(baseRom);
 

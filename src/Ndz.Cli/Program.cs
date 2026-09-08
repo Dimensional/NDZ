@@ -146,6 +146,24 @@ static void PrintUsage()
                                                              either reference implementation or ndz-studio's
                                                              own analyze() - see DictionaryAnalyzer's own
                                                              remarks for what that means for accuracy.
+          ndz analyze <target1.nds> [target2.nds ...] --base <base.nds> --pair
+                                     [--max-dict <size>] [--level N] [--block-size N]
+                                                             Previews what `compress --pair-out --block-size
+                                                             auto --raw-dict auto` would actually choose,
+                                                             without running a real pack - the base and every
+                                                             target are scored TOGETHER on their combined
+                                                             total (BlockSizeAnalyzer.AnalyzePair), not
+                                                             separately. This matters: analyzing the base and
+                                                             a target separately can each recommend a setting
+                                                             that's badly wrong once forced to share one block
+                                                             size - a bigger block helps a self-contained
+                                                             base's own ratio but can badly hurt a base-patched
+                                                             target once the block exceeds the base-patch
+                                                             window's fixed 16 KiB, collapsing that target's
+                                                             match quality. When in doubt, skip this and just
+                                                             let --block-size auto --raw-dict auto on the real
+                                                             `compress --pair-out` decide for you - this
+                                                             command is for previewing that choice first.
           ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]
                                                              Reconstruct the original .nds. --base is
                                                              required if the file used base-patch mode
@@ -200,10 +218,12 @@ static string FormatBlockSizeChoices() => string.Join(", ", NdzConstants.Support
 
 static int RunAnalyze(string[] args)
 {
-    string? inPath = null, basePath = null;
+    var positionals = new List<string>();
+    string? basePath = null;
     int level = 19;
     int? blockSize = null; // null = sweep NdzConstants.SupportedBlockSizes
     int maxDictSize = DictionaryAnalyzer.DefaultMaxDictionarySize;
+    bool pairMode = false;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -215,6 +235,10 @@ static int RunAnalyze(string[] args)
                 return 1;
             }
             basePath = args[i];
+        }
+        else if (args[i] == "--pair")
+        {
+            pairMode = true;
         }
         else if (args[i] == "--max-dict")
         {
@@ -241,20 +265,34 @@ static int RunAnalyze(string[] args)
             }
             blockSize = parsedBlockSize;
         }
-        else if (inPath is null) inPath = args[i];
-        else
-        {
-            Console.Error.WriteLine($"Unexpected argument: {args[i]}");
-            return 1;
-        }
+        else positionals.Add(args[i]);
     }
 
-    if (inPath is null)
+    if (positionals.Count == 0)
     {
         Console.Error.WriteLine("Usage: ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]");
+        Console.Error.WriteLine("   or: ndz analyze <target1.nds> [target2.nds ...] --base <base.nds> --pair [--max-dict <size>] [--level N] [--block-size N]");
         return 1;
     }
 
+    if (pairMode)
+    {
+        if (basePath is null)
+        {
+            Console.Error.WriteLine("--pair needs --base (there's nothing to base-patch every target against otherwise).");
+            return 1;
+        }
+        return RunPairAnalyze(positionals, basePath, maxDictSize, level, blockSize);
+    }
+
+    if (positionals.Count > 1)
+    {
+        Console.Error.WriteLine($"Unexpected argument: {positionals[1]}");
+        Console.Error.WriteLine("(Multiple ROMs given - did you mean --pair, to analyze them together as a shared-base family?)");
+        return 1;
+    }
+
+    string inPath = positionals[0];
     byte[] rom = File.ReadAllBytes(inPath);
     byte[]? baseRom = basePath == null ? null : File.ReadAllBytes(basePath);
     string romDescription = basePath == null
@@ -302,6 +340,72 @@ static int RunAnalyze(string[] args)
     Console.WriteLine($"Recommended: {FormatSize(sweep.RecommendedBlockSize)} blocks, {FormatSize(sweep.RecommendedDictionarySize)} dictionary " +
         $"(analyzed in {(DateTime.UtcNow - started).TotalSeconds:F1}s). {EstimateDisclaimer()} A bigger block trades away " +
         "random-access granularity for ratio, same as dictionary size trades away PSRAM - see BlockSizeAnalyzer's remarks.");
+    return 0;
+}
+
+/// <summary>
+/// `ndz analyze --pair`: previews what `ndz compress &lt;targets...&gt; --pair-out &lt;out&gt;
+/// --base &lt;base&gt; --block-size auto --raw-dict auto` would actually choose, without
+/// running a real pack - the base and every target share ONE block size (a star topology,
+/// same as <see cref="NdzPairWriter"/>), scored on their COMBINED total via
+/// <see cref="BlockSizeAnalyzer.AnalyzePair"/>. This exists because analyzing a base and a
+/// target SEPARATELY (the single-ROM `ndz analyze --base` path) can each recommend a
+/// setting that's badly wrong once the two are actually forced to share one block size -
+/// see AnalyzePair's own remarks on the fixed 16 KiB base-patch window not growing with
+/// block size, which is exactly the trap this command exists to avoid walking into by hand.
+/// </summary>
+static int RunPairAnalyze(List<string> targetPaths, string basePath, int maxDictSize, int level, int? blockSize)
+{
+    byte[] baseRom = File.ReadAllBytes(basePath);
+    byte[][] targetRoms = targetPaths.Select(File.ReadAllBytes).ToArray();
+    long totalOriginal = baseRom.Length + targetRoms.Sum(t => (long)t.Length);
+
+    var started = DateTime.UtcNow;
+    int[]? candidates = blockSize is int fixedBlockSize ? new[] { fixedBlockSize } : null;
+    string blockSizeDescription = blockSize is int fb ? $"at {FormatSize(fb)} blocks" : $"comparing every dictionary size at each of {FormatBlockSizeChoices()} blocks";
+
+    Console.WriteLine($"Analyzing '{basePath}' ({baseRom.Length:N0} bytes) as a shared base for {targetPaths.Count} " +
+        $"target(s) ({string.Join(", ", targetPaths.Select(p => $"'{p}'"))}), {blockSizeDescription}...");
+    Console.WriteLine("(Star topology, matching --pair-out: every target is base-patched against the base, never against each other.)");
+
+    var pair = BlockSizeAnalyzer.AnalyzePair(baseRom, targetRoms, blockSizeCandidates: candidates, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+
+    foreach (var candidate in pair.Candidates)
+    {
+        string blockMarker = candidate.BlockSize == pair.RecommendedBlockSize ? " <- recommended block size" : "";
+        Console.WriteLine();
+        Console.WriteLine($"--- {FormatSize(candidate.BlockSize)} blocks{blockMarker} ---");
+        Console.WriteLine($"Base '{basePath}':");
+        PrintDictionaryCurve(candidate.BaseAnalysis, baseRom.Length);
+        for (int i = 0; i < targetPaths.Count; i++)
+        {
+            Console.WriteLine($"Target '{targetPaths[i]}' (base-patched):");
+            PrintDictionaryCurve(candidate.TargetAnalyses[i], targetRoms[i].Length);
+        }
+        double combinedRatio = candidate.CombinedBestEstimatedTotalSize == 0 ? 0 : (double)totalOriginal / candidate.CombinedBestEstimatedTotalSize;
+        Console.WriteLine($"Combined at this block size: {candidate.CombinedBestEstimatedTotalSize:N0} B ({combinedRatio:F2}x overall)");
+    }
+
+    if (pair.Candidates.Count > 1)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"{"block size",12}   {"combined total",16}   est. ratio");
+        foreach (var candidate in pair.Candidates)
+        {
+            string marker = candidate.BlockSize == pair.RecommendedBlockSize ? " <- recommended" : "";
+            double ratio = candidate.CombinedBestEstimatedTotalSize == 0 ? 0 : (double)totalOriginal / candidate.CombinedBestEstimatedTotalSize;
+            Console.WriteLine($"{FormatSize(candidate.BlockSize),12}   {candidate.CombinedBestEstimatedTotalSize,14:N0} B   {ratio,8:F2}x{marker}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Recommended: {FormatSize(pair.RecommendedBlockSize)} blocks, base dict {FormatSize(pair.RecommendedBaseDictionarySize)}, " +
+        $"target dict(s) {string.Join(", ", pair.RecommendedTargetDictionarySizes.Select(x => FormatSize(x)))} " +
+        $"(analyzed in {(DateTime.UtcNow - started).TotalSeconds:F1}s). {EstimateDisclaimer()} A bigger block size trades away " +
+        "random-access granularity for ratio - but ALSO, uniquely here, can badly hurt a base-patched target once it exceeds the fixed 16 KiB " +
+        "base-patch window, which is why the winning size can differ sharply from what a target would recommend analyzed alone (see " +
+        "BlockSizeAnalyzer.AnalyzePair's remarks). When in doubt, just run `ndz compress <targets...> --pair-out <out> --base <base> " +
+        "--block-size auto --raw-dict auto` and let it pick these settings itself - that's exactly what this command previews.");
     return 0;
 }
 

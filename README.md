@@ -85,6 +85,23 @@ ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--bloc
                                                   curve and recommended settings (seconds,
                                                   not a full pack) - what --raw-dict auto
                                                   and --block-size auto run internally.
+ndz analyze <target1.nds> [target2.nds ...] --base <base.nds> --pair
+            [--max-dict <size>] [--level N] [--block-size N]
+                                                  Previews what compress --pair-out
+                                                  --block-size auto --raw-dict auto would
+                                                  choose, without a real pack: the base and
+                                                  every target are scored TOGETHER on their
+                                                  combined total, not separately - a block
+                                                  size that helps the self-contained base
+                                                  alone can badly hurt a base-patched
+                                                  target's match quality once it exceeds
+                                                  the base-patch window's fixed 16 KiB, so
+                                                  analyzing base and target independently
+                                                  can each recommend a setting that's wrong
+                                                  once forced to share one size. When in
+                                                  doubt, skip this and just let --block-size
+                                                  auto --raw-dict auto on the real
+                                                  compress --pair-out decide for you.
 ```
 
 ### Hardware limits

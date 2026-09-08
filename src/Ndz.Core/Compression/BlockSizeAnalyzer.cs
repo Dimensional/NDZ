@@ -58,10 +58,18 @@ public static class BlockSizeAnalyzer
         if (candidateSizes.Length == 0)
             throw new ArgumentException("At least one block size candidate is required.", nameof(blockSizeCandidates));
 
+        // Built once and reused across every block-size candidate below - dictionary
+        // content (the full-ROM content-defined-chunking + dedup-ranking pass, the
+        // expensive part) depends only on rom's own bytes, never on block size, so
+        // redoing it once per candidate would be pure waste. See DictionaryAnalyzer's
+        // AnalyzeCore remarks.
+        int[] ladder = DictionaryAnalyzer.BuildSizeLadder(maxDictionarySize);
+        byte[][] dictionaries = RawDictionaryBuilder.BuildLadder(rom, ladder);
+
         var candidates = new List<Candidate>(candidateSizes.Length);
         foreach (int blockSize in candidateSizes)
         {
-            var analysis = DictionaryAnalyzer.Analyze(rom, baseRom, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+            var analysis = DictionaryAnalyzer.AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries);
             candidates.Add(new Candidate(blockSize, analysis));
         }
 
@@ -140,13 +148,21 @@ public static class BlockSizeAnalyzer
         if (candidateSizes.Length == 0)
             throw new ArgumentException("At least one block size candidate is required.", nameof(blockSizeCandidates));
 
+        // Built once per ROM (base + each target) and reused across every block-size
+        // candidate - see the single-ROM Analyze's identical remarks above. Without this,
+        // an N-target pair would redo the full-ROM chunking pass 3x(N+1) times instead of
+        // just (N+1), for identical results either way.
+        int[] ladder = DictionaryAnalyzer.BuildSizeLadder(maxDictionarySize);
+        byte[][] baseDictionaries = RawDictionaryBuilder.BuildLadder(baseRom, ladder);
+        var targetDictionaries = targetRoms.Select(t => RawDictionaryBuilder.BuildLadder(t, ladder)).ToArray();
+
         var candidates = new List<PairCandidate>(candidateSizes.Length);
         foreach (int blockSize in candidateSizes)
         {
-            var baseAnalysis = DictionaryAnalyzer.Analyze(baseRom, null, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+            var baseAnalysis = DictionaryAnalyzer.AnalyzeCore(baseRom, null, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, baseDictionaries);
             var targetAnalyses = new DictionaryAnalyzer.Result[targetRoms.Count];
             for (int i = 0; i < targetRoms.Count; i++)
-                targetAnalyses[i] = DictionaryAnalyzer.Analyze(targetRoms[i], baseRom, maxDictionarySize, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+                targetAnalyses[i] = DictionaryAnalyzer.AnalyzeCore(targetRoms[i], baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, targetDictionaries[i]);
             candidates.Add(new PairCandidate(blockSize, baseAnalysis, targetAnalyses));
         }
 
