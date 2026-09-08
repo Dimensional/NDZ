@@ -1,0 +1,109 @@
+name: Build binaries
+
+# Manual runs just build + upload artifacts (handy for testing the workflow itself).
+# Pushing a tag like v1.2.3 additionally attaches every artifact to a GitHub Release.
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - run: dotnet restore NDZ.slnx
+      - run: dotnet build NDZ.slnx -c Release --no-restore
+      - run: dotnet test NDZ.slnx -c Release --no-build
+
+  # One self-contained, single-file, trimmed binary per RID - no .NET install required
+  # on the target machine. Built entirely on ubuntu-latest: standard (non-NativeAOT)
+  # self-contained publishing cross-compiles fine for every RID below from any single
+  # host OS, since trimming/publishing works against downloaded runtime packs, not the
+  # host's own native toolchain - no matrix of OS runners needed.
+  publish-native:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Publish self-contained ${{ matrix.rid }}
+        run: dotnet publish src/Ndz.Cli/Ndz.Cli.csproj -c Release -r ${{ matrix.rid }} -o out/${{ matrix.rid }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd out/${{ matrix.rid }}
+          case "${{ matrix.rid }}" in
+            win-*)
+              zip -r "../../ndz-${{ matrix.rid }}.zip" .
+              ;;
+            *)
+              chmod +x ndz
+              tar czf "../../ndz-${{ matrix.rid }}.tar.gz" .
+              ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ndz-${{ matrix.rid }}
+          path: ndz-${{ matrix.rid }}.*
+          if-no-files-found: error
+
+  # A framework-dependent build: just the app's own managed DLLs, no bundled runtime -
+  # smaller download, but the target machine needs the matching .NET runtime installed
+  # (`dotnet ndz.dll ...`, or `dotnet tool`-style invocation). Explicitly overrides the
+  # csproj's own self-contained/single-file/trimmed defaults (all three require
+  # self-contained) for this one build only - every other job keeps those defaults.
+  publish-portable:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Publish framework-dependent (portable)
+        run: >
+          dotnet publish src/Ndz.Cli/Ndz.Cli.csproj -c Release -o out/portable
+          -p:SelfContained=false -p:PublishSingleFile=false -p:PublishTrimmed=false
+      - name: Package
+        run: tar czf ndz-portable.tar.gz -C out/portable .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ndz-portable
+          path: ndz-portable.tar.gz
+          if-no-files-found: error
+
+  # Tag pushes only (see the `if` below) - workflow_dispatch runs stop after uploading
+  # artifacts above, which is enough to sanity-check the workflow without cutting a release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-native, publish-portable]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release with prebuilt binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --title "${{ github.ref_name }}" --generate-notes
