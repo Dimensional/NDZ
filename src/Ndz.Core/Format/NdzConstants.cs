@@ -136,7 +136,7 @@ public static class NdzConstants
     /// This is not a comfortable margin - confirmed directly by the format author
     /// (2026-09-01, relayed through the user): zstd level 19 decompresses in ~300us,
     /// against a DS hardware timeout of ~330us - about a 10% margin, not a generous one
-    /// ("I've been teeter-tottering on the edge because I love living recklessly," her
+    /// ("I've been teeter-tottering on the edge because I love living recklessly," their
     /// own words). lz4/lz4hc decompress in ~30us by contrast, a much wider margin, at
     /// the cost of a worse compression ratio - not currently implemented here (or in
     /// either confirmed reference's own packer; see <see cref="Compression.NdzWriter"/>'s

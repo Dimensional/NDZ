@@ -124,13 +124,31 @@ static void PrintUsage()
                                                              each base-patched target SEPARATELY and may
                                                              recommend a different size for each (an
                                                              already-excellent base-window match often makes a
-                                                             dictionary on a patched target pure overhead) -
-                                                             an explicit --raw-dict <size> still applies the
-                                                             same size to all of them, matching ndztool.py's
-                                                             own --pair-out (which only ever packs exactly 2
-                                                             ROMs - the N-target case is our own addition,
-                                                             needing no new wire-format bits since the
-                                                             container's own entry count was already generic).
+                                                             dictionary on a patched target pure overhead) - a
+                                                             single explicit --raw-dict <size> still applies
+                                                             the same size to all of them, matching
+                                                             ndztool.py's own --pair-out exactly (it only ever
+                                                             packs exactly 2 ROMs and only ever sends one size
+                                                             to both). To hand-pick DIFFERENT explicit sizes
+                                                             per ROM instead of using auto (e.g. from ndz
+                                                             analyze --pair's own recommendation), repeat
+                                                             --raw-dict once per ROM, in order: base first,
+                                                             then each target as given on the command line -
+                                                             e.g. --raw-dict 5m --raw-dict 0 for a base dict
+                                                             plus one target with none. 'auto' can't be mixed
+                                                             with explicit sizes, and the repeatable-list form
+                                                             (like the N-target case itself) is this project's
+                                                             own addition - neither needs new wire-format
+                                                             bits, since each pair entry is already a fully
+                                                             independent .ndz blob with its own dictionary
+                                                             section, if any. NOTE: the format author has
+                                                             confirmed independent per-entry dictionaries were
+                                                             NOT part of their own intended design for this
+                                                             feature (though they haven't worked on multi-ROM
+                                                             packing recently and haven't confirmed whether it
+                                                             actually misbehaves on real hardware either way) -
+                                                             see docs/ndz-format-spec.md before relying on this
+                                                             in a real release.
           ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]
                                                              Print an estimated dictionary-size/result-size
                                                              curve (sampled, not a full pack - seconds, not
@@ -433,8 +451,7 @@ static int RunCompress(string[] args)
     int frameSize = NdzConstants.FrameSize;
     bool enableFilters = true;
     bool noVerify = false;
-    int rawDictionarySize = 0;
-    bool rawDictAuto = false;
+    var rawDictArgs = new List<string>(); // resolved after positionals/pairOutPath are known - see below
     int maxDictSize = DictionaryAnalyzer.DefaultMaxDictionarySize;
 
     for (int i = 0; i < args.Length; i++)
@@ -487,15 +504,11 @@ static int RunCompress(string[] args)
                 Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
                 return 1;
             }
-            if (string.Equals(args[i], "auto", StringComparison.OrdinalIgnoreCase))
-            {
-                rawDictAuto = true;
-            }
-            else if (!TryParseSize(args[i], out rawDictionarySize))
-            {
-                Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
-                return 1;
-            }
+            // Collected raw, not parsed yet - repeatable in --pair-out mode (one value per
+            // ROM: base first, then each target in order) as well as the single-value form
+            // (applied uniformly, or 'auto'). Resolved once positionals/pairOutPath are
+            // known, below.
+            rawDictArgs.Add(args[i]);
         }
         else if (args[i] == "--max-dict")
         {
@@ -559,6 +572,67 @@ static int RunCompress(string[] args)
         return 1;
     }
 
+    // Resolve the collected --raw-dict value(s). Three shapes:
+    //  - none given: no dictionary anywhere (rawDictionarySize stays 0).
+    //  - exactly one 'auto': --raw-dict auto, handled later below (per-entry in pair mode).
+    //  - exactly one explicit size: applied uniformly to every ROM - matches ndztool.py's
+    //    own --pair-out exactly (it only ever sends one raw_dict_size to every sub-pack).
+    //  - --pair-out mode only: exactly (1 + target count) explicit sizes, one per ROM in
+    //    order (base first, then each target as given on the command line) - lets a caller
+    //    hand-pick sizes ndz analyze --pair (or manual judgment) recommends per entry,
+    //    without needing --raw-dict auto to (re-)compute them.
+    int rawDictionarySize = 0;
+    bool rawDictAuto = false;
+    int[]? targetDictionarySizes = null;
+    if (rawDictArgs.Count == 1 && string.Equals(rawDictArgs[0], "auto", StringComparison.OrdinalIgnoreCase))
+    {
+        rawDictAuto = true;
+    }
+    else if (rawDictArgs.Count == 1)
+    {
+        if (!TryParseSize(rawDictArgs[0], out rawDictionarySize))
+        {
+            Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
+            return 1;
+        }
+    }
+    else if (rawDictArgs.Count > 1)
+    {
+        if (pairOutPath is null)
+        {
+            Console.Error.WriteLine("--raw-dict can only be given once outside --pair-out mode.");
+            return 1;
+        }
+        if (rawDictArgs.Any(a => string.Equals(a, "auto", StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.Error.WriteLine("--raw-dict 'auto' can't be combined with explicit sizes and can only be given " +
+                "once - use --raw-dict auto by itself to size every ROM automatically, or give one explicit size " +
+                "per ROM (base first, then each target in the order given on the command line).");
+            return 1;
+        }
+        int expectedCount = 1 + targetPaths.Count;
+        if (rawDictArgs.Count != expectedCount)
+        {
+            Console.Error.WriteLine($"--raw-dict was given {rawDictArgs.Count} times, but a pair with " +
+                $"{targetPaths.Count} target(s) needs either exactly 1 (applied to every ROM) or exactly " +
+                $"{expectedCount} (one per ROM: base first, then each target in the order given).");
+            return 1;
+        }
+        var sizes = new int[expectedCount];
+        for (int i = 0; i < expectedCount; i++)
+        {
+            if (!TryParseSize(rawDictArgs[i], out sizes[i]))
+            {
+                string which = i == 0 ? "base" : $"target #{i}";
+                Console.Error.WriteLine($"--raw-dict value #{i + 1} ('{rawDictArgs[i]}', for the {which}) isn't a " +
+                    "valid size - use a number (e.g. 8m, 512k, or 0 for none).");
+                return 1;
+            }
+        }
+        rawDictionarySize = sizes[0];
+        targetDictionarySizes = sizes[1..];
+    }
+
     // Hardware limits, not preferences - see NdzConstants.MaxLevel/MaxBlockSize's
     // remarks. Checked here too (not just inside NdzWriter) so a bad --level/--block-size
     // is reported as a normal usage error, not an internal exception.
@@ -567,11 +641,11 @@ static int RunCompress(string[] args)
         Console.Error.WriteLine($"--level must be between 1 and {NdzConstants.MaxLevel} (higher levels decompress too slowly for the target hardware).");
         return 1;
     }
-    if (blockSizeAuto && rawDictionarySize > 0)
+    if (blockSizeAuto && (rawDictionarySize > 0 || targetDictionarySizes != null))
     {
-        Console.Error.WriteLine("--block-size auto can't be combined with an explicit --raw-dict <size> - " +
-            "use --raw-dict auto (or omit --raw-dict) so both are chosen together, since the best dictionary " +
-            "size depends on which block size gets picked.");
+        Console.Error.WriteLine("--block-size auto can't be combined with an explicit --raw-dict <size> (single " +
+            "value or one-per-ROM list) - use --raw-dict auto (or omit --raw-dict) so both are chosen together, " +
+            "since the best dictionary size depends on which block size gets picked.");
         return 1;
     }
 
@@ -586,7 +660,6 @@ static int RunCompress(string[] args)
             romForAnalysis = File.ReadAllBytes(inPath!);
     }
 
-    int[]? targetDictionarySizes = null;
     if (blockSizeAuto)
     {
         if (pairOutPath != null)

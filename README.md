@@ -28,6 +28,13 @@ one shared base plus any number of targets, each base-patched against that same 
 in a single file, not just a base+one-target pair. The only thing left unimplemented is
 a retired, never-produced trained-dictionary flag not worth building.
 
+## Diagrams
+
+- [**Smallest Wins**](https://claude.ai/code/artifact/2bf1f441-2e22-47b6-95a1-f700866d518d) —
+  how the per-block compression contest actually works (plain zstd vs. self-dictionary vs.
+  base-window vs. filters), walked through on real blocks from a real ROM, plus five things
+  an independent port of the format turned up packing real cartridge dumps through it.
+
 ## Usage
 
 ```
@@ -67,7 +74,20 @@ ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.
                                                   star topology: every target is patched
                                                   against the same shared base, never
                                                   against each other, so a whole family of
-                                                  similar ROMs can go in one file.
+                                                  similar ROMs can go in one file. A single
+                                                  --raw-dict <size> applies to every ROM
+                                                  uniformly (matching ndztool.py); repeat
+                                                  --raw-dict once per ROM (base first, then
+                                                  each target in order) to hand-pick a
+                                                  different size for each instead - e.g.
+                                                  --raw-dict 5m --raw-dict 0 for a base
+                                                  dict and one dict-less target. Note: the
+                                                  format author has confirmed independent
+                                                  per-entry dictionaries were NOT part of
+                                                  their intended design (real-hardware
+                                                  behavior unconfirmed either way) - see
+                                                  docs/ndz-format-spec.md before relying on
+                                                  this for a real release.
 ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]
                                                   Reconstruct the original .nds. --base is
                                                   required if the file used base-patch

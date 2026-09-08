@@ -32,7 +32,7 @@ namespace Ndz.Core.Compression;
 /// author confirmed (2026-09-01, relayed through the user) this was a real option in an
 /// earlier format iteration ("NDZv1") and a deliberate choice, not an oversight: zstd
 /// level 19 decompresses in ~300us on real DS hardware against a ~330us timeout (a ~10%
-/// margin - "I've been teeter-tottering on the edge," her own words), against lz4/
+/// margin - "I've been teeter-tottering on the edge," their own words), against lz4/
 /// lz4hc's much safer ~30us - kept as read-only legacy support rather than reinstated
 /// as an active option. Not implemented here either, for the same reason: not something
 /// any confirmed source's packer produces today. See

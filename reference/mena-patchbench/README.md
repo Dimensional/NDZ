@@ -3,8 +3,8 @@
 Shared by the user 2026-08-31, relayed from Mena Azer (mena@phenommod.com, the NDZ
 format's author), after [`reference/mena-packer/pack.rs`](../mena-packer/pack.rs).
 `ndztool.py` was produced by a Claude session running in Mena's own IDE, with real,
-direct read access to her actual `patchbench.py` module - deliberately made
-self-contained (no import of `patchbench.py` itself) at her request, per its own
+direct read access to their actual `patchbench.py` module - deliberately made
+self-contained (no import of `patchbench.py` itself) at their request, per its own
 docstring ("The format logic is duplicated from `patchbench.py`, which remains the
 reference implementation"). Confirmed 2026-09-01: this was a direct, AI-assisted
 extraction from the real module in hand, not a human's secondhand recollection of it -

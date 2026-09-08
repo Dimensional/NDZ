@@ -370,7 +370,7 @@ found between any of these and the black-box WASM probing either.
 ### Filter modes — algorithm confirmed and implemented 2026-08-31
 
 Confirmed real and in active use since 2026-08-25 (mode values 2-6 observed on real
-ROMs, independent of dictionary use). On 2026-08-31 Mena shared, through the user, her
+ROMs, independent of dictionary use). On 2026-08-31 Mena shared, through the user, their
 own Claude session's explanation of `patchbench.py`'s filter modes, then later the same
 day a working self-contained pack+unpack tool (`ndztool.py`) built against it — see
 `reference/mena-patchbench/` (`ndztool.py`, `filter-modes-explanation.md`, and that
@@ -428,6 +428,22 @@ unless a real file using it ever surfaces - the live path is `RawDictionary`.
 rather than risk misreading a trained-dict blob as raw content on the (currently
 impossible, since nothing produces this bit) chance its stored/decompressed sizes
 happened to match.
+
+**Multi-dictionary pair containers — confirmed NOT the format author's intended design,
+2026-09-08.** Each pair-container entry (the self-contained base, and every base-patched
+target) is independently `RawDictionary`-capable, since each is a fully independent
+`.ndz` blob with its own front-matter - `NdzPairWriter` uses this to give the base and
+each target their own separately-sized (or absent) dictionary (see "Pair container
+format" below, and `Ndz.Cli`'s `--raw-dict auto`/repeatable `--raw-dict <size>` in pair
+mode). The user asked Mena directly whether this was intended. Their answer: **no** -
+multiple independent dictionaries within one pair container was not part of their own
+design. They also said they **haven't worked on the multi-ROM "stacking" feature in a
+while**, and have **not confirmed whether it actually misbehaves on real hardware** either
+way - so this is a confirmed *design* divergence from the format author's intent, with
+the real-hardware *functional* question still genuinely open, not resolved in either
+direction. Do not treat "not intended" as "confirmed broken," and do not treat "not yet
+confirmed broken" as "confirmed safe." Ask the user before changing this behavior, and
+before treating either open question as settled.
 
 ### Pair container format — implemented 2026-08-31, generalized to N ROMs 2026-09-06
 
