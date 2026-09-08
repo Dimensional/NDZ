@@ -31,21 +31,36 @@ a retired, never-produced trained-dictionary flag not worth building.
 ## Usage
 
 ```
-ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N]
-                                 [--no-filters] [--raw-dict <size>] [--base <base.nds>]
+ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size 8192|16384|32768|auto]
+                                 [--frame-size N] [--no-filters] [--no-verify]
+                                 [--raw-dict <size>|auto] [--max-dict <size>] [--base <base.nds>]
                                                   Compress a decrypted .nds into .ndz.
                                                   --raw-dict (e.g. 8m, 512k) derives a
                                                   dictionary from this ROM's own repeated
                                                   content, up to that size - there's no
                                                   option to load externally-supplied
                                                   dictionary content, because neither
-                                                  reference implementation has one either.
-                                                  --base patches against a second,
-                                                  already-decrypted .nds. --level and
-                                                  --block-size (default 8192, power of
-                                                  two) are capped at the target
-                                                  hardware's decode-speed limits - see
-                                                  "Hardware limits" below.
+                                                  reference implementation has one either;
+                                                  `auto` samples the ROM (like `ndz
+                                                  analyze`) and picks a size itself, capped
+                                                  by --max-dict (default 8m). --block-size
+                                                  defaults to 8192 bytes; 16384/32768 are
+                                                  also offered (see "Hardware limits"
+                                                  below), or `auto` to pick from those the
+                                                  same way --raw-dict auto does (can't be
+                                                  combined with an explicit --raw-dict
+                                                  <size>, since the best dictionary size
+                                                  depends on which block size wins).
+                                                  --frame-size (e.g. 128k, default 131072)
+                                                  is the outer seek-table bucketing
+                                                  granularity, not a hardware limit - just
+                                                  must be >= --block-size. --base patches
+                                                  against a second, already-decrypted
+                                                  .nds. --level is capped at the target
+                                                  hardware's decode-speed limit - see
+                                                  "Hardware limits" below. --no-verify
+                                                  skips the default decode-and-byte-compare
+                                                  check that runs after every pack.
 ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>
                                                   Pack a base plus one or more base-patched
                                                   targets into one self-contained file - a
@@ -65,16 +80,28 @@ ndz info <in.ndz>                                Print front-matter and seek-tab
                                                   never needs --base either way.
 ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--index N]
                                                   Decompress and byte-compare against the original.
+ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--block-size N]
+                                                  Print a sampled dictionary-size/block-size
+                                                  curve and recommended settings (seconds,
+                                                  not a full pack) - what --raw-dict auto
+                                                  and --block-size auto run internally.
 ```
 
 ### Hardware limits
 
-Compression level (max 19) and block size (max 8192 bytes) are capped, not just
+Compression level (max 19) and block size (max 32768 bytes) are capped, not just
 defaulted: the real target hardware (DSPico) decodes on the fly while the console
 waits on a cart read, so a higher level or a bigger block would produce a file that
 packs fine and then fails - or stalls - on real hardware. `NdzWriter.Compress` throws
 rather than silently accept either past its limit, matching `ndztool.py`'s own refusal
 (`NDZ_MAX_LEVEL`/`NDZ_MAX_BLOCK_SIZE`).
+
+The block-size ceiling was raised from 8192 to 32768 bytes on 2026-09-06 after a
+firmware fix on the real hardware; the CLI's own `--block-size` menu is curated down to
+exactly three choices (8 KiB/16 KiB/32 KiB) rather than every power of two up to that
+ceiling, to keep the choice simple and always a safe one - a bigger block trades away
+random-access granularity (a whole block must be decompressed to reach any byte in it)
+for ratio.
 
 ROMs should be decrypted first — NDZ compresses raw bytes as-is and does no
 cryptographic work of its own.

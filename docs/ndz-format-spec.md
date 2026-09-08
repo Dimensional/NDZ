@@ -176,7 +176,7 @@ See `NonDefaultBlockSizeTests.cs`-style coverage in `BlockModeTests.cs`
 
 `Ndz.Core.Compression.NdzWriter.Compress` — for each 128 KiB frame, splits it into up to
 sixteen 8 KiB blocks by default (the last block of the last frame may be shorter; block
-size is a `blockSize` parameter, any power of two up to the hardware ceiling of 8192 -
+size is a `blockSize` parameter, any power of two up to the hardware ceiling of 32768 -
 see "Hardware limits" below) and compresses each independently via `ZStdBlock` with
 `CompressionOptions { Type = <level>, BlockSize = blockSize }`. If a dictionary was
 supplied, every block is compressed *both* plain and
@@ -209,8 +209,20 @@ waits on a cart read, so two knobs are **hardware ceilings, not preferences** -
 
 - compression level: max **19** (`NdzConstants.MaxLevel`) - higher decompresses too
   slowly for the console to keep up.
-- block size: max **8192 bytes** (`NdzConstants.MaxBlockSize`) - a bigger block takes
-  too long to fetch *and* decompress on a cache miss and the console freezes.
+- block size: max **32768 bytes** (`NdzConstants.MaxBlockSize`) - a bigger block takes
+  too long to fetch *and* decompress on a cache miss and the console freezes. **Raised
+  2026-09-06** from an earlier 8192-byte ceiling, relayed through the user directly from
+  the format author: a firmware bug that capped real blocks at 8 KiB is now fixed, and
+  16/32 KiB blocks are confirmed to work on real hardware. The CLI's own `--block-size`
+  menu is deliberately curated down to exactly three choices - 8/16/32 KiB
+  (`NdzConstants.SupportedBlockSizes`), or `auto` to pick among them
+  (`Ndz.Core.Compression.BlockSizeAnalyzer`) - not every power of two up to this ceiling,
+  to keep the choice simple and always a safe one; `NdzWriter` itself still accepts any
+  power of two up to the ceiling (needed for reference-compatibility testing, e.g.
+  `ndztool.py`'s own 4 KiB default). The local `reference/mena-patchbench/ndztool.py`
+  copy still hardcodes `NDZ_MAX_BLOCK_SIZE = 8192` and refuses to *pack* past it - that
+  script predates the fix and is stale on this one point specifically, not evidence
+  against it.
 
 `ndztool.py` refuses to pack past either rather than produce a file that "packs fine and
 then fails on real hardware" - `NdzWriter.Compress` throws `ArgumentOutOfRangeException`
@@ -417,17 +429,30 @@ rather than risk misreading a trained-dict blob as raw content on the (currently
 impossible, since nothing produces this bit) chance its stored/decompressed sizes
 happened to match.
 
-### Pair container format — implemented 2026-08-31
+### Pair container format — implemented 2026-08-31, generalized to N ROMs 2026-09-06
 
-An outer container format wrapping two complete `.ndz` blobs side by side, used to ship
-a base-patch pair together with no external base file needed. Both read and write sides
-are confirmed from `ndztool.py`'s `--pair-out`:
+An outer container format wrapping two or more complete `.ndz` blobs side by side, used
+to ship a base-patch family together with no external base file needed. Both read and
+write sides are confirmed from `ndztool.py`'s `--pair-out`:
 `NDZ_PAIR_MAGIC = 0x505A444E` ('NDZP'), header `[magic][hdrSize=16384][nRoms][reserved]`
 (all u32) at offset 0, then per-entry `[offset][size][origSize][gameCode]` (u32 x3 +
-4 bytes) at `0x10 + 0x10*i` - entries themselves are the base blob followed by the
-patched blob, each padded to a 16 KiB (front-matter-size) boundary. One entry is
-self-contained; the other (the `BasePatch`-flagged one) resolves its base to the *other*
-entry in the same container, not an externally-supplied file.
+4 bytes) at `0x10 + 0x10*i` - entries themselves are the base blob followed by one or
+more patched blobs, each padded to a 16 KiB (front-matter-size) boundary. Entry 0 is
+always self-contained; every other entry (each `BasePatch`-flagged) resolves its base to
+that *same* entry 0 in the container, not an externally-supplied file and not each
+other - a star topology, not a chain.
+
+**Generalized from exactly 2 ROMs to N, 2026-09-06** (`NdzPairWriter`/commit `35c87ba`):
+the on-disk format's own `nRoms` header field, and both `ndztool.py`'s own decode side
+(`read_pair_entries`) and this project's read side (`NdzPairContainer`), were already
+fully generic - only `ndztool.py`'s own `cmd_pack` CLI hardcodes exactly 2 (`n_roms=2`),
+a limitation of its CLI, not the format. `NdzPairWriter.Write` now takes
+`IReadOnlyList<byte[]> targetRoms` (one or more), packing the base once and every target
+base-patched against it; the original 2-ROM signature is now a single-target convenience
+overload. `Ndz.Cli`'s `compress --pair-out` accepts one or more positional targets. No
+wire-format changes were needed. Validated on real ROMs (Mega Man Star Force: 4 and 6
+regional/version releases packed together, cross-checked byte-identical against a real
+`ndztool.py` on every entry) - see the `ndz-spec-provenance` memory for full numbers.
 
 **Implemented** (`Ndz.Core.Format.NdzPairEntry`, `Ndz.Core.Compression.NdzPairWriter`/
 `NdzPairContainer` - mirroring the `NdzWriter`/`NdzArchive` write/read split; see

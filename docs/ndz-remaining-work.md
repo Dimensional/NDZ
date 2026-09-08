@@ -207,6 +207,13 @@ base opened plain, the second opened with the first's *decompressed* bytes as it
 `baseRom`). Genuinely depends on base-patch (§2) existing first - there's nothing to
 pair otherwise - so this is naturally the last of the three to build.
 
+**2026-09-06 update: generalized to N ROMs.** This section (and the design as originally
+built) described exactly one base plus one target; `NdzPairWriter`/`NdzPairContainer`
+were later generalized to a base plus any number of targets (a star topology, still one
+shared base, never a chain) with no wire-format changes needed - see
+`docs/ndz-format-spec.md`'s "Pair container format" section and the
+`ndz-spec-provenance` memory for the full design/validation notes.
+
 ## Suggested build order
 
 1. ~~**Filter modes**~~ - done, see the update note above.
