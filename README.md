@@ -22,8 +22,11 @@ Implemented: compression, random-access decompression, raw-content dictionary su
 (including for dictionaries past zstd's implicit ~8 MiB window default), all five
 per-block byte-transform filter modes, base-ROM patch mode (windowed dictionary
 compression against a base ROM, not a binary diff), and the pair-container format for
-shipping a base+patch pair together in one self-contained file. The only thing left
-unimplemented is a retired, never-produced trained-dictionary flag not worth building.
+shipping a whole family of ROMs together in one self-contained file - a star topology:
+one shared base plus any number of targets, each base-patched against that same base
+(never against each other), so e.g. every regional/version release of one game can go
+in a single file, not just a base+one-target pair. The only thing left unimplemented is
+a retired, never-produced trained-dictionary flag not worth building.
 
 ## Usage
 
@@ -43,15 +46,20 @@ ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size N]
                                                   two) are capped at the target
                                                   hardware's decode-speed limits - see
                                                   "Hardware limits" below.
-ndz compress <in.nds> --pair-out <pair.ndz> --base <base.nds>
-                                                  Pack a base + base-patched pair into one
-                                                  self-contained file.
+ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>
+                                                  Pack a base plus one or more base-patched
+                                                  targets into one self-contained file - a
+                                                  star topology: every target is patched
+                                                  against the same shared base, never
+                                                  against each other, so a whole family of
+                                                  similar ROMs can go in one file.
 ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]
                                                   Reconstruct the original .nds. --base is
                                                   required if the file used base-patch
                                                   (not for a pair container, which carries
                                                   its own). --index picks which ROM to
-                                                  extract from a pair container.
+                                                  extract from a pair container (default:
+                                                  the self-contained one).
 ndz info <in.ndz>                                Print front-matter and seek-table summary,
                                                   or (for a pair container) both entries' -
                                                   never needs --base either way.
@@ -85,3 +93,7 @@ dotnet test NDZ.slnx
 - `src/Ndz.Cli` — the `ndz` command-line tool.
 - `tests/Ndz.Core.Tests` — round-trip, random-access, and format-validation tests
   against synthetic ROM fixtures.
+
+---
+
+Built collaboratively with [Claude 5](https://claude.com) (Anthropic).
