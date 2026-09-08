@@ -7,12 +7,12 @@ blocks, 8 KB by default) and an external seek table, built on
 
 Because every frame decompresses independently, reading any byte range only requires
 decompressing the frame(s) it falls in — not the whole ROM. Verified against a real,
-independent third-party tool (`ndztool.py`), not just internally: this port can pack a
-real ROM and have it read correctly by real tooling, and can read a real `.ndz` file (or
-pair container) produced by that tooling, filter-mode and base-patch blocks included -
-confirmed end-to-end on real cartridge dumps too, not just synthetic test fixtures,
-including a base-patched Pokémon Black/White pair (140x on the patched ROM alone, from
-how much of the two games' content overlaps) cross-checked byte-identical against
+independent third-party tool (`ndztool.py`), found at [NDZ-Tools](https://github.com/CotyTernes/NDZ-Tools),
+not just internally: this port can pack a real ROM and have it read correctly by real tooling, 
+and can read a real `.ndz` file (or pair container) produced by that tooling, filter-mode 
+and base-patch blocks included - confirmed end-to-end on real cartridge dumps too, not just 
+synthetic test fixtures, including a base-patched Pokémon Black/White pair (140x on the patched 
+ROM alone, from how much of the two games' content overlaps) cross-checked byte-identical against
 `ndztool.py` in every pack/read direction. See
 [`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the on-disk format, full
 implementation status, and provenance, and
