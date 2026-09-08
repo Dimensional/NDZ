@@ -50,6 +50,81 @@ public sealed class NdsRomInfo
     public required byte RomVersion { get; init; }
 
     /// <summary>
+    /// The header's own region-LOCK byte (0x1D, GBATEK's literal field name is "NDS
+    /// Region") - 00h=Normal, 80h=China (iQue), or 40h=Korea for an NDS-only cart.
+    /// Despite the field name, this is NOT the "USA / Europe / Japan"-style release
+    /// territory most people mean by "region" - see <see cref="DestinationLabel"/> for
+    /// that. The raw byte, always populated regardless of platform - see
+    /// <see cref="RegionLockLabel"/> for the version that actually accounts for whether
+    /// it's safe to claim anything from it.
+    /// </summary>
+    public required byte RegionLock { get; init; }
+
+    /// <summary>
+    /// <see cref="RegionLock"/> decoded to a human label, or empty when there's nothing
+    /// worth asserting: the default "Normal" (0x00, true for virtually every commercial
+    /// game), OR any DSi title (<see cref="IsDsiEnhanced"/>/<see cref="IsDsiExclusive"/>).
+    /// NitroTwl's own model notes DSi cartridges reinterpret this same byte for an
+    /// unrelated, unspecified DSi-specific purpose - confirmed empirically, not just
+    /// theoretically: a real DSi-enhanced Pokemon Black dump reads 0x40 here (an NDS-only
+    /// cart's "Korea" value) despite not actually being Korea-locked. Claiming a region
+    /// lock from it on a DSi title would be actively wrong, not just uninteresting, so
+    /// this returns empty there rather than a label nobody can trust.
+    /// </summary>
+    public string RegionLockLabel => IsDsiEnhanced || IsDsiExclusive ? string.Empty : RegionLock switch
+    {
+        0x00 => string.Empty,
+        0x80 => "China / iQue",
+        0x40 => "Korea",
+        _ => $"0x{RegionLock:X2}",
+    };
+
+    /// <summary>
+    /// The game code's own 4th character (not a separate header field - <see cref="GameCode"/>'s
+    /// highest byte, since it's read little-endian) - GBATEK calls this "Destination/Language"
+    /// and it's what "USA / Europe / Japan" release-territory labels actually come from,
+    /// e.g. Pokemon HeartGold's real code IPKE ends in 'E' = USA, Pokemon Black/White's
+    /// IRAO/IRBO end in 'O' = International. Distinct from <see cref="RegionLock"/> (a
+    /// different, rarely-set hardware field GBATEK happens to also call "Region").
+    /// </summary>
+    public char DestinationCode => (char)((GameCode >> 24) & 0xFF);
+
+    /// <summary>
+    /// <see cref="DestinationCode"/> decoded to a human label, per GBATEK's own
+    /// destination-letter table (extracted from no$gba - a copy ships in the NitroTwl
+    /// project's docs/, "GBATEK DS Cartridge Header.htm"). W-Z all denote a further,
+    /// unspecified European variant per GBATEK's own admittedly vague "W..Z Europe #3..5"
+    /// entry - grouped here rather than asserting a precise #3/#4/#5 split GBATEK itself
+    /// doesn't commit to.
+    /// </summary>
+    public string DestinationLabel => DestinationCode switch
+    {
+        'A' => "Asian",
+        'C' => "Chinese",
+        'D' => "German",
+        'E' => "English/USA",
+        'F' => "French",
+        'H' => "Dutch",
+        'I' => "Italian",
+        'J' => "Japanese",
+        'K' => "Korean",
+        'L' => "USA #2",
+        'M' => "Swedish",
+        'N' => "Norwegian",
+        'O' => "International",
+        'P' => "Europe",
+        'Q' => "Danish",
+        'R' => "Russian",
+        'S' => "Spanish",
+        'T' => "USA+AUS",
+        'U' => "Australian",
+        'V' => "EUR+AUS",
+        >= 'W' and <= 'Z' => "Europe (alt.)",
+        'B' or 'G' => "Unassigned",
+        _ => $"Unknown ('{DestinationCode}')",
+    };
+
+    /// <summary>
     /// Reads the game code and banner out of a raw, decrypted .nds image. The banner's
     /// real content size depends on its own version field (a u16 at the banner offset
     /// itself) - see <see cref="NdzConstants.GetBannerContentSize"/> - not a fixed
@@ -70,6 +145,7 @@ public sealed class NdsRomInfo
 
         uint gameCode = BinaryPrimitives.ReadUInt32LittleEndian(rom.Slice(NdzConstants.NdsHeader.GameCodeOffset, 4));
         byte unitCode = rom[NdzConstants.NdsHeader.UnitCodeOffset];
+        byte regionLock = rom[NdzConstants.NdsHeader.RegionOffset];
         byte romVersion = rom[NdzConstants.NdsHeader.RomVersionOffset];
         uint bannerOffset = BinaryPrimitives.ReadUInt32LittleEndian(rom.Slice(NdzConstants.NdsHeader.BannerOffsetOffset, 4));
 
@@ -94,6 +170,6 @@ public sealed class NdsRomInfo
 
         rom.Slice((int)bannerOffset, available).CopyTo(banner);
 
-        return new NdsRomInfo { GameCode = gameCode, Banner = banner, BannerVersion = bannerVersion, UnitCode = unitCode, RomVersion = romVersion };
+        return new NdsRomInfo { GameCode = gameCode, Banner = banner, BannerVersion = bannerVersion, UnitCode = unitCode, RomVersion = romVersion, RegionLock = regionLock };
     }
 }

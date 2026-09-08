@@ -191,6 +191,16 @@ public static class NdzConstants
         /// </summary>
         public const int RomVersionOffset = 0x1E;
 
+        /// <summary>
+        /// 0x1D, 1 byte. 00h=Normal, 80h=China (iQue), 40h=Korea on an NDS-only cart -
+        /// confirmed against the NitroTwl project's own <c>NdsHeader.NdsRegion</c>, whose
+        /// doc comment also notes DSi cartridges can reinterpret this same byte for
+        /// DSi-specific purposes (not modeled here - see
+        /// <see cref="Format.NdsRomInfo.Region"/> for exactly what this project claims
+        /// about it).
+        /// </summary>
+        public const int RegionOffset = 0x1D;
+
         public const int BannerOffsetOffset = 0x68;
         public const int HeaderLength = 0x200;
     }

@@ -75,6 +75,65 @@ public class NdsRomInfoTests
         Assert.Equal(romVersion, info.RomVersion);
     }
 
+    [Theory]
+    [InlineData((byte)0x00)]
+    [InlineData((byte)0x80)]
+    [InlineData((byte)0x40)]
+    public void FromRom_ReadsRegionLock(byte regionLock)
+    {
+        byte[] rom = TestRom.Build(0x1000, region: regionLock);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(regionLock, info.RegionLock);
+    }
+
+    [Theory]
+    [InlineData((byte)0x00, "")]
+    [InlineData((byte)0x80, "China / iQue")]
+    [InlineData((byte)0x40, "Korea")]
+    [InlineData((byte)0x12, "0x12")]
+    public void RegionLockLabel_DecodesRawByteOnAnNdsOnlyCart(byte regionLock, string expected)
+    {
+        byte[] rom = TestRom.Build(0x1000, region: regionLock, unitCode: 0x00);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(expected, info.RegionLockLabel);
+    }
+
+    /// <summary>
+    /// Confirmed empirically against a real DSi-enhanced Pokemon Black dump, which reads
+    /// 0x40 here (an NDS-only cart's "Korea" value) despite not actually being
+    /// Korea-locked - RegionLockLabel must stay empty on any DSi title regardless of the
+    /// raw byte, rather than repeat a claim nobody can verify.
+    /// </summary>
+    [Theory]
+    [InlineData((byte)0x02)] // NDS+DSi (DSi-enhanced)
+    [InlineData((byte)0x03)] // DSi-exclusive
+    public void RegionLockLabel_EmptyOnAnyDsiTitleRegardlessOfRawByte(byte unitCode)
+    {
+        byte[] rom = TestRom.Build(0x1000, region: 0x40, unitCode: unitCode);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(string.Empty, info.RegionLockLabel);
+    }
+
+    [Theory]
+    [InlineData("IRBO", 'O', "International")] // Pokemon White's real game code
+    [InlineData("IRAO", 'O', "International")] // Pokemon Black's real game code
+    [InlineData("IPKE", 'E', "English/USA")]   // Pokemon HeartGold's real game code
+    [InlineData("ABCJ", 'J', "Japanese")]
+    [InlineData("ABCP", 'P', "Europe")]
+    [InlineData("ABCB", 'B', "Unassigned")]
+    [InlineData("ABCZ", 'Z', "Europe (alt.)")]
+    public void FromRom_DecodesDestinationFromGameCodesFourthCharacter(string gameCode, char expectedCode, string expectedLabel)
+    {
+        byte[] rom = TestRom.Build(0x1000, gameCode: gameCode);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(expectedCode, info.DestinationCode);
+        Assert.Equal(expectedLabel, info.DestinationLabel);
+    }
+
     [Fact]
     public void FromRom_ThrowsOnZeroBannerOffset()
     {

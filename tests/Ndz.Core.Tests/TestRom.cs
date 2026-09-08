@@ -20,7 +20,8 @@ internal static class TestRom
     /// </param>
     /// <param name="unitCode">The header's platform byte (0x12) - see <see cref="NdsRomInfo.UnitCode"/>. Written explicitly for the same reason as <paramref name="bannerVersion"/>.</param>
     /// <param name="romVersion">The header's revision byte (0x1E) - see <see cref="NdsRomInfo.RomVersion"/>. Written explicitly for the same reason as <paramref name="bannerVersion"/>.</param>
-    public static byte[] Build(int totalSize, string gameCode = "ABCE", int seed = 1, ushort bannerVersion = 0, byte unitCode = 0x00, byte romVersion = 0x00)
+    /// <param name="region">The header's region byte (0x1D) - see <see cref="NdsRomInfo.Region"/>. Written explicitly for the same reason as <paramref name="bannerVersion"/>.</param>
+    public static byte[] Build(int totalSize, string gameCode = "ABCE", int seed = 1, ushort bannerVersion = 0, byte unitCode = 0x00, byte romVersion = 0x00, byte region = 0x00)
     {
         if (totalSize < 0x1000)
             throw new ArgumentException("Test ROM must be at least 0x1000 bytes to fit a header + banner.", nameof(totalSize));
@@ -39,6 +40,9 @@ internal static class TestRom
 
         // Unit code (0x12): 00h=NDS, 02h=NDS+DSi, 03h=DSi-exclusive.
         rom[0x12] = unitCode;
+
+        // Region (0x1D).
+        rom[0x1D] = region;
 
         // ROM version / revision (0x1E).
         rom[0x1E] = romVersion;
