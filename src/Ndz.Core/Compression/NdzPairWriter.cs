@@ -56,7 +56,7 @@ public static class NdzPairWriter
     /// docs/ndz-remaining-work.md).
     /// </param>
     public static void Write(Stream output, byte[] baseRom, IReadOnlyList<byte[]> targetRoms,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, IReadOnlyList<int?>? targetDictionarySizes = null)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, IReadOnlyList<int?>? targetDictionarySizes = null, int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(baseRom);
@@ -92,14 +92,14 @@ public static class NdzPairWriter
         var blobs = new byte[entryCount][];
         using (var baseStream = new MemoryStream())
         {
-            NdzWriter.Compress(baseRom, baseStream, level, blockSize, enableFilters, baseRom: null, rawDictionarySize, frameSize);
+            NdzWriter.Compress(baseRom, baseStream, level, blockSize, enableFilters, baseRom: null, rawDictionarySize, frameSize, maxDegreeOfParallelism);
             blobs[0] = baseStream.ToArray();
         }
         for (int i = 0; i < targetRoms.Count; i++)
         {
             int dictSize = targetDictionarySizes?[i] ?? rawDictionarySize;
             using var targetStream = new MemoryStream();
-            NdzWriter.Compress(targetRoms[i], targetStream, level, blockSize, enableFilters, baseRom: baseRom, dictSize, frameSize);
+            NdzWriter.Compress(targetRoms[i], targetStream, level, blockSize, enableFilters, baseRom: baseRom, dictSize, frameSize, maxDegreeOfParallelism);
             blobs[i + 1] = targetStream.ToArray();
         }
 
@@ -134,31 +134,31 @@ public static class NdzPairWriter
         }
     }
 
-    /// <summary>Single-target convenience overload - see the <see cref="Write(Stream, byte[], IReadOnlyList{byte[]}, CompressionType, int, bool, int, int, IReadOnlyList{int?}?)"/> overload for the general (and star-topology) case.</summary>
+    /// <summary>Single-target convenience overload - see the <see cref="Write(Stream, byte[], IReadOnlyList{byte[]}, CompressionType, int, bool, int, int, IReadOnlyList{int?}?, int)"/> overload for the general (and star-topology) case.</summary>
     public static void Write(Stream output, byte[] baseRom, byte[] targetRom,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null, int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(targetRom);
-        Write(output, baseRom, new[] { targetRom }, level, blockSize, enableFilters, rawDictionarySize, frameSize, new[] { targetDictionarySize });
+        Write(output, baseRom, new[] { targetRom }, level, blockSize, enableFilters, rawDictionarySize, frameSize, new[] { targetDictionarySize }, maxDegreeOfParallelism);
     }
 
     public static void WriteFile(string outputPath, string baseRomPath, IReadOnlyList<string> targetRomPaths,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, IReadOnlyList<int?>? targetDictionarySizes = null)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, IReadOnlyList<int?>? targetDictionarySizes = null, int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(targetRomPaths);
         byte[] baseRom = File.ReadAllBytes(baseRomPath);
         byte[][] targetRoms = targetRomPaths.Select(File.ReadAllBytes).ToArray();
         using var output = File.Create(outputPath);
-        Write(output, baseRom, targetRoms, level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySizes);
+        Write(output, baseRom, targetRoms, level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySizes, maxDegreeOfParallelism);
     }
 
     public static void WriteFile(string outputPath, string baseRomPath, string targetRomPath,
-        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null)
+        CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int? targetDictionarySize = null, int maxDegreeOfParallelism = -1)
     {
         byte[] baseRom = File.ReadAllBytes(baseRomPath);
         byte[] targetRom = File.ReadAllBytes(targetRomPath);
         using var output = File.Create(outputPath);
-        Write(output, baseRom, targetRom, level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySize);
+        Write(output, baseRom, targetRom, level, blockSize, enableFilters, rawDictionarySize, frameSize, targetDictionarySize, maxDegreeOfParallelism);
     }
 
     private static void WriteEntry(byte[] header, int index, uint blobOffset, uint size, uint originalSize, uint gameCode)

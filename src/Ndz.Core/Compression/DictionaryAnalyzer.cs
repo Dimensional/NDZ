@@ -114,6 +114,17 @@ public static class DictionaryAnalyzer
     ///    size. This is why <see cref="DefaultMaxDictionarySize"/> is 6 MiB, not the full
     ///    8 MiB budget, and why the recommendation can land below the cap too.
     /// </summary>
+    /// <param name="maxDegreeOfParallelism">
+    /// Caps how many dictionary-ladder candidates (see <see cref="BuildSizeLadder"/> -
+    /// commonly ~10: 0, 512 KiB, then every whole MiB up to the cap) are sampled
+    /// concurrently - each is a fully independent pass over the same sampled blocks, so
+    /// this is embarrassingly parallel, the same shape as <see cref="NdzWriter.Compress"/>'s
+    /// own per-frame parallelism (see its identical parameter for what -1, the default,
+    /// means). Without this, analysis is entirely single-threaded while a real pack of
+    /// the same ROM uses every core - real-world observed effect: Analyze taking about as
+    /// long as a full Pack despite compressing far less data in total, purely because Pack
+    /// gets a free multi-core speedup this didn't.
+    /// </param>
     public static Result Analyze(
         byte[] rom,
         byte[]? baseRom = null,
@@ -123,14 +134,15 @@ public static class DictionaryAnalyzer
         double sampleFraction = 0.04,
         int minSampleBytes = 4 * 1024 * 1024,
         int maxSampleBytes = 16 * 1024 * 1024,
-        double diminishingReturnsTolerance = DefaultDiminishingReturnsTolerance)
+        double diminishingReturnsTolerance = DefaultDiminishingReturnsTolerance,
+        int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(rom);
         if (maxDictionarySize < 0)
             throw new ArgumentOutOfRangeException(nameof(maxDictionarySize));
         int[] ladder = BuildSizeLadder(maxDictionarySize);
         byte[][] dictionaries = rom.Length == 0 ? Array.Empty<byte[]>() : RawDictionaryBuilder.BuildLadder(rom, ladder);
-        return AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries);
+        return AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries, maxDegreeOfParallelism);
     }
 
     /// <summary>
@@ -156,7 +168,8 @@ public static class DictionaryAnalyzer
         int maxSampleBytes,
         double diminishingReturnsTolerance,
         int[] ladder,
-        byte[][] dictionaries)
+        byte[][] dictionaries,
+        int maxDegreeOfParallelism = -1)
     {
         if (rom.Length == 0)
         {
@@ -218,9 +231,17 @@ public static class DictionaryAnalyzer
             baselineBest[s] = best;
         }
 
-        var curve = new List<CurvePoint>(ladder.Length);
+        // Each ladder candidate is a fully independent pass over the same (read-only)
+        // sampled blocks - nothing here depends on another candidate's result - so this
+        // runs in parallel, the same shape as NdzWriter.Compress's own per-frame
+        // parallelism (see maxDegreeOfParallelism's remarks on Analyze). Written into a
+        // pre-sized array by index (curve[i], not curve.Add) rather than a List, since
+        // List<T> isn't safe for concurrent Add from multiple threads - the index write
+        // also keeps the result in ladder's own ascending order regardless of which
+        // thread finishes which candidate first, which SelectRecommendedSize requires.
+        var curve = new CurvePoint[ladder.Length];
 
-        for (int i = 0; i < ladder.Length; i++)
+        Parallel.For(0, ladder.Length, new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism }, i =>
         {
             byte[] dictionary = dictionaries[i];
             // Matches NdzWriter's own `if (derivedDictionary.Length >= 4096)` threshold -
@@ -254,13 +275,13 @@ public static class DictionaryAnalyzer
                 double ratio = sampledOriginalBytes == 0 ? 1.0 : (double)sampledCompressedBytes / sampledOriginalBytes;
                 long estimatedPayload = (long)Math.Round(ratio * rom.Length);
                 long estimatedTotal = estimatedPayload + dictionary.Length;
-                curve.Add(new CurvePoint(ladder[i], estimatedTotal));
+                curve[i] = new CurvePoint(ladder[i], estimatedTotal);
             }
             finally
             {
                 dictBlock?.Dispose();
             }
-        }
+        });
 
         return new Result
         {

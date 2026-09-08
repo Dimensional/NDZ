@@ -112,7 +112,20 @@ public static class NdzWriter
     /// of useful duplicate content, no dictionary is stored even though this was
     /// nonzero - matches `ndztool.py`'s own `if len(raw_dict) >= 4096` gate exactly.
     /// </param>
-    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
+    /// <param name="maxDegreeOfParallelism">
+    /// Caps how many frames compress concurrently - forwarded straight to
+    /// <see cref="System.Threading.Tasks.ParallelOptions.MaxDegreeOfParallelism"/>. -1
+    /// (the default) means unbounded, i.e. whatever the .NET thread pool schedules -
+    /// unchanged CLI behavior, and the right choice for a headless batch tool with
+    /// nothing else competing for the machine. A GUI packing in the background instead
+    /// of exiting when done has a real reason to pass something less than every core
+    /// (e.g. <c>Environment.ProcessorCount - 1</c>) - level-19 zstd across every frame of
+    /// a real ROM genuinely can occupy every logical core otherwise, which is by design
+    /// (matches the reference packer's own multi-threaded approach - see this class's own
+    /// remarks) but can make an interactive window feel like it's hung even though the UI
+    /// thread itself was never blocked, just starved of scheduler time by everything else.
+    /// </param>
+    public static void Compress(byte[] rom, Stream output, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, byte[]? baseRom = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(rom);
         ArgumentNullException.ThrowIfNull(output);
@@ -241,6 +254,7 @@ public static class NdzWriter
             };
 
         Parallel.For(0, frameCount,
+            new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
             localInit: () => (Plain: new ZStdBlock(plainOptions), Dict: dictOptions == null ? null : new ZStdBlock(dictOptions)),
             body: (f, _, threadLocalBlocks) =>
             {
@@ -261,12 +275,12 @@ public static class NdzWriter
         WriteTrailer(output, seekTable);
     }
 
-    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize)
+    public static void CompressFile(string inputNdsPath, string outputNdzPath, CompressionType level = DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, string? baseRomPath = null, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, int maxDegreeOfParallelism = -1)
     {
         byte[] rom = File.ReadAllBytes(inputNdsPath);
         byte[]? baseRom = baseRomPath == null ? null : File.ReadAllBytes(baseRomPath);
         using var output = File.Create(outputNdzPath);
-        Compress(rom, output, level, blockSize, enableFilters, baseRom, rawDictionarySize, frameSize);
+        Compress(rom, output, level, blockSize, enableFilters, baseRom, rawDictionarySize, frameSize, maxDegreeOfParallelism);
     }
 
     /// <summary>

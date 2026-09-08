@@ -42,6 +42,13 @@ public static class BlockSizeAnalyzer
         public required int RecommendedDictionarySize { get; init; }
     }
 
+    /// <param name="maxDegreeOfParallelism">
+    /// Forwarded to <see cref="DictionaryAnalyzer.AnalyzeCore"/> for every block-size
+    /// candidate below - see its own remarks. The outer loop over block-size candidates
+    /// itself stays sequential (only ~3 iterations, each already ladder-parallel
+    /// internally - parallelizing both levels would over-subscribe rather than help on
+    /// most machines).
+    /// </param>
     public static Result Analyze(
         byte[] rom,
         byte[]? baseRom = null,
@@ -51,7 +58,8 @@ public static class BlockSizeAnalyzer
         double sampleFraction = 0.04,
         int minSampleBytes = 4 * 1024 * 1024,
         int maxSampleBytes = 16 * 1024 * 1024,
-        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance)
+        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance,
+        int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(rom);
         var candidateSizes = (blockSizeCandidates ?? DefaultCandidates).Distinct().OrderBy(x => x).ToArray();
@@ -69,7 +77,7 @@ public static class BlockSizeAnalyzer
         var candidates = new List<Candidate>(candidateSizes.Length);
         foreach (int blockSize in candidateSizes)
         {
-            var analysis = DictionaryAnalyzer.AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries);
+            var analysis = DictionaryAnalyzer.AnalyzeCore(rom, baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, dictionaries, maxDegreeOfParallelism);
             candidates.Add(new Candidate(blockSize, analysis));
         }
 
@@ -129,6 +137,7 @@ public static class BlockSizeAnalyzer
     /// the dominant share of a pair's total size - are exactly what a bigger block
     /// quietly breaks.
     /// </summary>
+    /// <param name="maxDegreeOfParallelism">Forwarded to <see cref="DictionaryAnalyzer.AnalyzeCore"/> for every ROM/block-size combination below - see its own remarks. The outer loops (block-size candidates, and base+each target within one candidate) stay sequential for the same over-subscription reason as the plain <see cref="Analyze"/> overload.</param>
     public static PairResult AnalyzePair(
         byte[] baseRom,
         IReadOnlyList<byte[]> targetRoms,
@@ -138,7 +147,8 @@ public static class BlockSizeAnalyzer
         double sampleFraction = 0.04,
         int minSampleBytes = 4 * 1024 * 1024,
         int maxSampleBytes = 16 * 1024 * 1024,
-        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance)
+        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance,
+        int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(baseRom);
         ArgumentNullException.ThrowIfNull(targetRoms);
@@ -159,10 +169,10 @@ public static class BlockSizeAnalyzer
         var candidates = new List<PairCandidate>(candidateSizes.Length);
         foreach (int blockSize in candidateSizes)
         {
-            var baseAnalysis = DictionaryAnalyzer.AnalyzeCore(baseRom, null, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, baseDictionaries);
+            var baseAnalysis = DictionaryAnalyzer.AnalyzeCore(baseRom, null, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, baseDictionaries, maxDegreeOfParallelism);
             var targetAnalyses = new DictionaryAnalyzer.Result[targetRoms.Count];
             for (int i = 0; i < targetRoms.Count; i++)
-                targetAnalyses[i] = DictionaryAnalyzer.AnalyzeCore(targetRoms[i], baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, targetDictionaries[i]);
+                targetAnalyses[i] = DictionaryAnalyzer.AnalyzeCore(targetRoms[i], baseRom, level, blockSize, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, ladder, targetDictionaries[i], maxDegreeOfParallelism);
             candidates.Add(new PairCandidate(blockSize, baseAnalysis, targetAnalyses));
         }
 
@@ -188,9 +198,10 @@ public static class BlockSizeAnalyzer
         double sampleFraction = 0.04,
         int minSampleBytes = 4 * 1024 * 1024,
         int maxSampleBytes = 16 * 1024 * 1024,
-        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance)
+        double diminishingReturnsTolerance = DictionaryAnalyzer.DefaultDiminishingReturnsTolerance,
+        int maxDegreeOfParallelism = -1)
     {
         ArgumentNullException.ThrowIfNull(targetRom);
-        return AnalyzePair(baseRom, new[] { targetRom }, blockSizeCandidates, maxDictionarySize, level, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance);
+        return AnalyzePair(baseRom, new[] { targetRom }, blockSizeCandidates, maxDictionarySize, level, sampleFraction, minSampleBytes, maxSampleBytes, diminishingReturnsTolerance, maxDegreeOfParallelism);
     }
 }
