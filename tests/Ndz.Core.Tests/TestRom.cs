@@ -18,7 +18,9 @@ internal static class TestRom
     /// explicitly (rather than left to incidental pattern bytes) so tests can assert on
     /// an exact, known banner size.
     /// </param>
-    public static byte[] Build(int totalSize, string gameCode = "ABCE", int seed = 1, ushort bannerVersion = 0)
+    /// <param name="unitCode">The header's platform byte (0x12) - see <see cref="NdsRomInfo.UnitCode"/>. Written explicitly for the same reason as <paramref name="bannerVersion"/>.</param>
+    /// <param name="romVersion">The header's revision byte (0x1E) - see <see cref="NdsRomInfo.RomVersion"/>. Written explicitly for the same reason as <paramref name="bannerVersion"/>.</param>
+    public static byte[] Build(int totalSize, string gameCode = "ABCE", int seed = 1, ushort bannerVersion = 0, byte unitCode = 0x00, byte romVersion = 0x00)
     {
         if (totalSize < 0x1000)
             throw new ArgumentException("Test ROM must be at least 0x1000 bytes to fit a header + banner.", nameof(totalSize));
@@ -34,6 +36,12 @@ internal static class TestRom
 
         // Game code (0x0C-0x0F).
         System.Text.Encoding.ASCII.GetBytes(gameCode).CopyTo(rom, 0x0C);
+
+        // Unit code (0x12): 00h=NDS, 02h=NDS+DSi, 03h=DSi-exclusive.
+        rom[0x12] = unitCode;
+
+        // ROM version / revision (0x1E).
+        rom[0x1E] = romVersion;
 
         // Banner offset (0x68): right after the 0x200-byte header.
         const uint bannerOffset = 0x200;

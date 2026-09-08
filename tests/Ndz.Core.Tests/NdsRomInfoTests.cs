@@ -48,6 +48,33 @@ public class NdsRomInfoTests
     /// out-of-range bannerOffset is a hard error, not something to silently degrade
     /// past with an empty banner.
     /// </summary>
+    [Theory]
+    [InlineData((byte)0x00, false, false, false)] // NDS-only
+    [InlineData((byte)0x02, true, false, true)]   // NDS+DSi (DSi-enhanced, e.g. Pokemon Black/White)
+    [InlineData((byte)0x03, false, true, true)]   // DSi-exclusive
+    public void FromRom_ReadsUnitCodeAndDerivedPlatformFlags(byte unitCode, bool expectedEnhanced, bool expectedExclusive, bool expectedHasExtendedHeader)
+    {
+        byte[] rom = TestRom.Build(0x1000, unitCode: unitCode);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(unitCode, info.UnitCode);
+        Assert.Equal(expectedEnhanced, info.IsDsiEnhanced);
+        Assert.Equal(expectedExclusive, info.IsDsiExclusive);
+        Assert.Equal(expectedHasExtendedHeader, info.HasDsiExtendedHeader);
+    }
+
+    [Theory]
+    [InlineData((byte)0)]
+    [InlineData((byte)1)]
+    [InlineData((byte)255)]
+    public void FromRom_ReadsRomVersion(byte romVersion)
+    {
+        byte[] rom = TestRom.Build(0x1000, romVersion: romVersion);
+        NdsRomInfo info = NdsRomInfo.FromRom(rom);
+
+        Assert.Equal(romVersion, info.RomVersion);
+    }
+
     [Fact]
     public void FromRom_ThrowsOnZeroBannerOffset()
     {

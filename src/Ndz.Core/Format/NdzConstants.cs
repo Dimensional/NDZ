@@ -172,8 +172,50 @@ public static class NdzConstants
     public static class NdsHeader
     {
         public const int GameCodeOffset = 0x0C;
+
+        /// <summary>
+        /// 0x12, 1 byte. 00h=NDS-only, 02h=NDS+DSi (DSi-enhanced), 03h=DSi-exclusive - the
+        /// hardware-checked field that actually answers "is this a DSi title", unlike the
+        /// banner's own version field (which only says whether the banner happens to carry
+        /// an animated icon). Confirmed against the NitroTwl project's own
+        /// <c>NdsHeader.UnitCode</c> (a from-scratch NDS/DSi header implementation, not
+        /// derived from this project). See <see cref="Format.NdsRomInfo.UnitCode"/>.
+        /// </summary>
+        public const int UnitCodeOffset = 0x12;
+
+        /// <summary>
+        /// 0x1E, 1 byte, usually 00h. Distinguishes re-releases sharing the same game code
+        /// (e.g. a Wii U Virtual Console dump vs. the original cartridge) - confirmed
+        /// against the NitroTwl project's own <c>NdsHeader.RomVersion</c>. See
+        /// <see cref="Format.NdsRomInfo.RomVersion"/>.
+        /// </summary>
+        public const int RomVersionOffset = 0x1E;
+
         public const int BannerOffsetOffset = 0x68;
         public const int HeaderLength = 0x200;
+    }
+
+    /// <summary>
+    /// Offsets and lengths of fields within an .nds banner, relative to the banner's own
+    /// start (see <see cref="NdsRomInfo.Banner"/>) - the standard DS banner layout: a
+    /// 0x20-byte header (version u16 + CRC16s + reserved), a 4bpp 32x32 icon bitmap, a
+    /// 16-color RGB555 palette (index 0 always transparent), then one 256-byte UTF-16LE
+    /// title slot per language in a fixed order (Japanese, English, French, German,
+    /// Italian, Spanish, [Chinese, Korean if the banner version is high enough to carry
+    /// them] - see <see cref="Format.NdsTitleLanguage"/>). Stable across every banner
+    /// version: newer versions only ever append more content after this (more title
+    /// slots, then a DSi-enhanced animated icon sequence) - see
+    /// <see cref="GetBannerContentSize"/>. English is always index 1 regardless of
+    /// version. Consumed by <see cref="Format.NdsIcon"/>.
+    /// </summary>
+    public static class NdsBanner
+    {
+        public const int BitmapOffset = 0x20;
+        public const int BitmapLength = 0x200;
+        public const int PaletteOffset = 0x220;
+        public const int PaletteLength = 0x20;
+        public const int TitleTableOffset = 0x240;
+        public const int TitleSlotLength = 0x100;
     }
 
     /// <summary>
