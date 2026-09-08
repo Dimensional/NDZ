@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Ndz.Core.Format;
 
 namespace Ndz.Gui.ViewModels;
@@ -35,10 +36,23 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public bool HasItems => QueueItems.Count > 0;
 
+    /// <summary>The Examine tab's own queue - a sibling feature to this class's own Pack queue, not a child of it.</summary>
+    public ExamineViewModel Examine { get; } = new();
+
+    /// <summary>True when the Examine tab is showing instead of Pack - the only two screens this window has.</summary>
+    [ObservableProperty]
+    private bool _showExamine;
+
     public MainWindowViewModel()
     {
         QueueItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasItems));
     }
+
+    [RelayCommand]
+    private void ShowPackTab() => ShowExamine = false;
+
+    [RelayCommand]
+    private void ShowExamineTab() => ShowExamine = true;
 
     /// <summary>
     /// Accepts a mix of ROM file paths and directory paths (from a drop or a picker) -

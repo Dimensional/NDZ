@@ -42,6 +42,14 @@ public partial class MainWindow : Window
         if (paths.Length == 0)
             return;
 
+        // Examine has no base/target grouping concept - every drop just adds sources,
+        // wherever in the pane it lands.
+        if (vm.ShowExamine)
+        {
+            await vm.Examine.AddPathsAsync(paths);
+            return;
+        }
+
         // Landed anywhere on an existing card (not just its "+" strip - a wide, forgiving
         // hit area beats a thin one)? Add as that card's patch target instead of a new
         // top-level card. e.Source is the actual visual under the pointer at drop time -
@@ -151,5 +159,86 @@ public partial class MainWindow : Window
         string[] paths = folders.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
         if (paths.Length > 0)
             await vm.AddPathsAsync(paths);
+    }
+
+    private async void OnExamineOpenFileClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+            return;
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open .ndz / .nds / .dsi file(s)",
+            AllowMultiple = true,
+            FileTypeFilter = [new FilePickerFileType("NDZ / NDS / DSi") { Patterns = ["*.ndz", "*.nds", "*.dsi"] }],
+        });
+
+        string[] paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
+        if (paths.Length > 0)
+            await vm.Examine.AddPathsAsync(paths);
+    }
+
+    private async void OnExamineAddFolderClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+            return;
+
+        IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Add a folder (searched recursively for .ndz/.nds/.dsi)",
+            AllowMultiple = true,
+        });
+
+        string[] paths = folders.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
+        if (paths.Length > 0)
+            await vm.Examine.AddPathsAsync(paths);
+    }
+
+    private void OnRemoveSourceClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm || sender is not Button { DataContext: ExamineSourceViewModel source })
+            return;
+
+        vm.Examine.RemoveSource(source);
+    }
+
+    /// <summary>
+    /// Unpacks one Examine entry. A standalone base-patched .ndz (see
+    /// <see cref="ExamineEntryViewModel.RequiresExternalBaseRom"/>) needs its base ROM
+    /// picked first - a pair-container entry never does, it resolves its own base
+    /// internally.
+    /// </summary>
+    private async void OnUnpackClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ExamineEntryViewModel entry })
+            return;
+
+        byte[]? externalBaseRom = null;
+        if (entry.RequiresExternalBaseRom)
+        {
+            IReadOnlyList<IStorageFile> baseFiles = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = $"Select base ROM for \"{entry.ShortTitle}\"",
+                AllowMultiple = false,
+                FileTypeFilter = [new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] }],
+            });
+
+            string? basePath = baseFiles.FirstOrDefault()?.TryGetLocalPath();
+            if (basePath is null)
+                return;
+            externalBaseRom = await File.ReadAllBytesAsync(basePath);
+        }
+
+        IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Save unpacked ROM for \"{entry.ShortTitle}\"",
+            SuggestedFileName = entry.SuggestedFileName,
+            FileTypeChoices = [new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] }],
+            DefaultExtension = "nds",
+        });
+
+        string? outputPath = file?.TryGetLocalPath();
+        if (outputPath is not null)
+            await entry.UnpackAsync(outputPath, externalBaseRom);
     }
 }
