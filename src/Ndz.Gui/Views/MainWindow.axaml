@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Ndz.Gui.ViewModels"
+        xmlns:m="using:Ndz.Gui.Models"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="640"
@@ -57,6 +58,34 @@
         </Style>
         <Style Selector="Button.targetstrip:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="#20242D"/>
+        </Style>
+        <Style Selector="ComboBox">
+            <Setter Property="Background" Value="#14161A"/>
+            <Setter Property="BorderBrush" Value="#2C303A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Foreground" Value="#E8EAEE"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        </Style>
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="#5C8DF6"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#4E7DE0"/>
+        </Style>
+        <Style Selector="Button.primary:disabled /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2C303A"/>
+            <Setter Property="TextBlock.Foreground" Value="#6B7280"/>
         </Style>
     </Window.Styles>
 
@@ -124,23 +153,38 @@
                                             <TextBlock Text="Already in queue" Foreground="#E0A94D" FontSize="11" FontWeight="SemiBold"/>
                                         </Border>
 
-                                        <!-- Target chips - this card's patch targets, if any -->
+                                        <!-- Target chips - this card's patch targets, if any. A plain vertical
+                                             StackPanel (not a WrapPanel) so each chip stretches to the card's full
+                                             content width instead of hugging its own content and leaving a gap -
+                                             the title column below absorbs whatever space the icon/dropdown/remove
+                                             button don't need. -->
                                         <ItemsControl ItemsSource="{Binding Targets}">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <WrapPanel Orientation="Horizontal"/>
+                                                    <StackPanel Orientation="Vertical" Spacing="6"/>
                                                 </ItemsPanelTemplate>
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:RomEntryViewModel">
-                                                    <Border Background="#22262F" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8" Padding="5,4" Margin="0,0,6,6" ToolTip.Tip="{Binding TooltipText}">
-                                                        <StackPanel Orientation="Horizontal" Spacing="5">
-                                                            <Border Width="20" Height="20" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="3">
+                                                    <Border Background="#22262F" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8" Padding="6,5" ToolTip.Tip="{Binding TooltipText}">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+                                                            <Border Grid.Column="0" Width="20" Height="20" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="3">
                                                                 <Image Source="{Binding Icon}" Width="16" Height="16" RenderOptions.BitmapInterpolationMode="None"/>
                                                             </Border>
-                                                            <TextBlock Text="{Binding ShortTitle}" Foreground="#C7CCD4" FontSize="11" MaxWidth="80" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                                                            <Button Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
-                                                        </StackPanel>
+                                                            <TextBlock Grid.Column="1" Text="{Binding ShortTitle}" Foreground="#C7CCD4" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                            <!-- This target's own dictionary size, independent of the base's and every
+                                                                 other target's (block size is shared across the whole pack, so no
+                                                                 per-target block-size control here). -->
+                                                            <ComboBox Grid.Column="2" ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}"
+                                                                      FontSize="9" Padding="5,2" Width="64" HorizontalContentAlignment="Center" VerticalAlignment="Center">
+                                                                <ComboBox.ItemTemplate>
+                                                                    <DataTemplate x:DataType="m:SizeOption">
+                                                                        <TextBlock Text="{Binding Label}"/>
+                                                                    </DataTemplate>
+                                                                </ComboBox.ItemTemplate>
+                                                            </ComboBox>
+                                                            <Button Grid.Column="3" Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
+                                                        </Grid>
                                                     </Border>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -154,6 +198,49 @@
                                         <TextBlock Text="{Binding PlatformText}" Foreground="#6B7280" FontSize="10.5" TextWrapping="Wrap"/>
                                         <TextBlock Text="{Binding BannerNote}" IsVisible="{Binding HasBannerNote}" Foreground="#6B7280" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap"/>
                                         <TextBlock Text="{Binding SourceFileText}" Foreground="#6B7280" FontSize="10.5" FontFamily="Consolas,Menlo,monospace" TextTrimming="CharacterEllipsis"/>
+
+                                        <Border Height="1" Background="#262A33"/>
+
+                                        <Grid ColumnDefinitions="*,*">
+                                            <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
+                                                <TextBlock Text="DICTIONARY" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold"/>
+                                                <ComboBox ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate x:DataType="m:SizeOption">
+                                                            <TextBlock Text="{Binding Label}"/>
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
+                                                <TextBlock Text="BLOCK SIZE" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold"/>
+                                                <ComboBox ItemsSource="{Binding BlockSizeOptions}" SelectedItem="{Binding SelectedBlockSize}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate x:DataType="m:SizeOption">
+                                                            <TextBlock Text="{Binding Label}"/>
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <Button Classes="ghost" Content="{Binding AnalyzeButtonText}" Command="{Binding AnalyzeCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+
+                                        <Border IsVisible="{Binding HasAnalysisResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding AnalysisResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
+                                        <Border IsVisible="{Binding HasAnalysisError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding AnalysisError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
+
+                                        <Button Classes="primary" Content="{Binding PackButtonText}" Click="OnPackClicked" IsEnabled="{Binding !IsPacking}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+
+                                        <Border IsVisible="{Binding HasPackResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding PackResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
+                                        <Border IsVisible="{Binding HasPackError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding PackError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

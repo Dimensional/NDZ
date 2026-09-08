@@ -2,8 +2,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Ndz.Gui.App"
              xmlns:local="using:Ndz.Gui"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Dark">
+             <!-- Forced dark: every card/control in this app is hand-styled against a fixed
+                  dark palette (the "Signature" theme from the design mockups) - Light/System
+                  switching isn't implemented yet, so this at least keeps FluentTheme-templated
+                  controls we don't hand-style ourselves (ComboBox's popup, scrollbars) from
+                  clashing against it on a light-mode system. Revisit once real theming lands. -->
 
     <Application.DataTemplates>
         <local:ViewLocator/>

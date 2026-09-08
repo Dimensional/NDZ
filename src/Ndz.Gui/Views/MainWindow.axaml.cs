@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -93,6 +94,47 @@ public partial class MainWindow : Window
         string[] paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
         if (paths.Length > 0)
             await vm.AddTargetsAsync(baseItem, paths);
+    }
+
+    private async void OnPackClicked(object? sender, RoutedEventArgs e)
+    {
+        // Same pattern as OnAddTargetClicked: the clicked button's DataContext is this
+        // card's own RomEntryViewModel, inherited from the DataTemplate it's declared in.
+        if (sender is not Button { DataContext: RomEntryViewModel item })
+            return;
+
+        IStorageFolder? suggestedFolder = null;
+        try
+        {
+            string? dir = Path.GetDirectoryName(item.FilePath);
+            if (dir is not null)
+                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(Path.GetFullPath(dir)));
+        }
+        catch
+        {
+            // Best-effort only - the picker just opens wherever the OS defaults to instead.
+        }
+
+        IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Save .ndz for \"{item.ShortTitle}\"",
+            SuggestedFileName = $"{SanitizeFileName(item.ShortTitle)}.ndz",
+            SuggestedStartLocation = suggestedFolder,
+            FileTypeChoices = [new FilePickerFileType("NDZ container") { Patterns = ["*.ndz"] }],
+            DefaultExtension = "ndz",
+        });
+
+        string? path = file?.TryGetLocalPath();
+        if (path is not null)
+            await item.PackAsync(path);
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        char[] invalid = Path.GetInvalidFileNameChars();
+        string cleaned = new(name.Where(c => !invalid.Contains(c)).ToArray());
+        cleaned = cleaned.Trim();
+        return cleaned.Length > 0 ? cleaned : "output";
     }
 
     private async void OnAddFolderClicked(object? sender, RoutedEventArgs e)

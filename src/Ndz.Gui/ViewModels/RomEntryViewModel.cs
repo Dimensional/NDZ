@@ -2,9 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Ndz.Core.Compression;
+using Ndz.Core.Format;
+using Ndz.Gui.Models;
 
 namespace Ndz.Gui.ViewModels;
 
@@ -20,6 +25,18 @@ namespace Ndz.Gui.ViewModels;
 /// </summary>
 public partial class RomEntryViewModel : ViewModelBase
 {
+    /// <summary>
+    /// Leaves one logical core free for the UI thread and everything else on the
+    /// machine, rather than the Core analyzers'/writers' own default of unbounded
+    /// (every core - fine for the CLI, a real problem for a window that needs to keep
+    /// feeling alive while this runs in the background). Real-world motivation: a full
+    /// pack at level 19 legitimately can occupy every core by design (matches the
+    /// reference packer's own multi-threaded approach), which made an actual GUI session
+    /// feel like it had hung even though the UI thread itself was never blocked - just
+    /// starved of scheduler time.
+    /// </summary>
+    private static readonly int MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1);
+
     private readonly Action<RomEntryViewModel> _onRemove;
 
     public string FilePath { get; }
@@ -96,6 +113,68 @@ public partial class RomEntryViewModel : ViewModelBase
     /// <summary>This card's patch targets, if any - rendered as small chips, not full cards. Empty for a target itself (see the class remarks).</summary>
     public ObservableCollection<RomEntryViewModel> Targets { get; } = [];
 
+    /// <summary>The curated block-size menu (see <see cref="NdzConstants.SupportedBlockSizes"/>) plus <see cref="SizeOption.Auto"/> - fixed, doesn't grow from Analyze the way <see cref="DictionarySizeOptions"/> does, since there's already a real curated Core menu for this one.</summary>
+    public ObservableCollection<SizeOption> BlockSizeOptions { get; } =
+        new([SizeOption.Auto, .. NdzConstants.SupportedBlockSizes.Select(SizeOption.FromBytes)]);
+
+    [ObservableProperty]
+    private SizeOption _selectedBlockSize = SizeOption.Auto;
+
+    /// <summary>
+    /// Starts with just <see cref="SizeOption.Auto"/> - unlike block size, there's no
+    /// fixed curated dictionary-size menu in Core (the CLI takes freeform sizes via
+    /// `--raw-dict`), so real choices only appear once Analyze actually computes one for
+    /// this specific ROM.
+    /// </summary>
+    public ObservableCollection<SizeOption> DictionarySizeOptions { get; } = [SizeOption.Auto];
+
+    [ObservableProperty]
+    private SizeOption _selectedDictionarySize = SizeOption.Auto;
+
+    [ObservableProperty]
+    private bool _isAnalyzing;
+
+    public string AnalyzeButtonText => IsAnalyzing ? "Analyzing…" : "Analyze";
+
+    partial void OnIsAnalyzingChanged(bool value) => OnPropertyChanged(nameof(AnalyzeButtonText));
+
+    [ObservableProperty]
+    private string? _analysisResultText;
+
+    public bool HasAnalysisResult => !string.IsNullOrEmpty(AnalysisResultText);
+
+    [ObservableProperty]
+    private string? _analysisError;
+
+    public bool HasAnalysisError => !string.IsNullOrEmpty(AnalysisError);
+
+    // [ObservableProperty]-generated partial hooks, called after the backing field changes
+    // and its own PropertyChanged fires - used here just to keep the dependent Has* flags
+    // in sync, since they're plain computed properties, not [ObservableProperty] fields
+    // themselves.
+    partial void OnAnalysisResultTextChanged(string? value) => OnPropertyChanged(nameof(HasAnalysisResult));
+    partial void OnAnalysisErrorChanged(string? value) => OnPropertyChanged(nameof(HasAnalysisError));
+
+    [ObservableProperty]
+    private bool _isPacking;
+
+    public string PackButtonText => IsPacking ? "Packing…" : "Pack";
+
+    partial void OnIsPackingChanged(bool value) => OnPropertyChanged(nameof(PackButtonText));
+
+    [ObservableProperty]
+    private string? _packResultText;
+
+    public bool HasPackResult => !string.IsNullOrEmpty(PackResultText);
+
+    [ObservableProperty]
+    private string? _packError;
+
+    public bool HasPackError => !string.IsNullOrEmpty(PackError);
+
+    partial void OnPackResultTextChanged(string? value) => OnPropertyChanged(nameof(HasPackResult));
+    partial void OnPackErrorChanged(string? value) => OnPropertyChanged(nameof(HasPackError));
+
     public RomEntryViewModel(
         string filePath,
         Bitmap icon,
@@ -144,4 +223,183 @@ public partial class RomEntryViewModel : ViewModelBase
 
     [RelayCommand]
     private void Remove() => _onRemove(this);
+
+    /// <summary>
+    /// Runs the real Core analyzer against this card's actual ROM bytes - re-read from
+    /// disk here rather than kept resident since load time (a queue of dozens of ROMs
+    /// staying fully loaded in memory just in case someone clicks Analyze would be a real
+    /// cost for an occasional action). Uses <see cref="BlockSizeAnalyzer.AnalyzePair"/>
+    /// when this card has targets (scored on base+targets combined - see that method's own
+    /// remarks on why analyzing the base alone would pick a block size that badly hurts
+    /// base-patched targets), or the plain single-ROM <see cref="BlockSizeAnalyzer.Analyze"/>
+    /// otherwise. Both are real zstd-level-19 compression sampling passes, not
+    /// instant - always off the UI thread.
+    /// </summary>
+    [RelayCommand]
+    private async Task AnalyzeAsync()
+    {
+        IsAnalyzing = true;
+        AnalysisError = null;
+        try
+        {
+            if (Targets.Count == 0)
+            {
+                byte[] rom = await Task.Run(() => File.ReadAllBytes(FilePath));
+                BlockSizeAnalyzer.Result result = await Task.Run(() => BlockSizeAnalyzer.Analyze(rom, maxDegreeOfParallelism: MaxDegreeOfParallelism));
+
+                var recommended = result.Candidates.First(c => c.BlockSize == result.RecommendedBlockSize);
+                double ratio = recommended.BestEstimatedTotalSize <= 0 ? 0 : (double)rom.LongLength / recommended.BestEstimatedTotalSize;
+
+                ApplyBlockSize(result.RecommendedBlockSize);
+                ApplyDictionarySize(result.RecommendedDictionarySize);
+                AnalysisResultText = $"Recommended: {SizeOption.FromBytes(result.RecommendedBlockSize).Label} block · " +
+                    $"{SizeOption.FromBytes(result.RecommendedDictionarySize).Label} dict · ~{ratio:0.#}x";
+            }
+            else
+            {
+                byte[] baseRom = await Task.Run(() => File.ReadAllBytes(FilePath));
+                string[] targetPaths = Targets.Select(t => t.FilePath).ToArray();
+                byte[][] targetRoms = await Task.Run(() => targetPaths.Select(File.ReadAllBytes).ToArray());
+
+                BlockSizeAnalyzer.PairResult result = await Task.Run(() => BlockSizeAnalyzer.AnalyzePair(baseRom, targetRoms, maxDegreeOfParallelism: MaxDegreeOfParallelism));
+
+                var recommended = result.Candidates.First(c => c.BlockSize == result.RecommendedBlockSize);
+                long originalSize = baseRom.LongLength + targetRoms.Sum(t => (long)t.LongLength);
+                double ratio = recommended.CombinedBestEstimatedTotalSize <= 0 ? 0 : (double)originalSize / recommended.CombinedBestEstimatedTotalSize;
+
+                ApplyBlockSize(result.RecommendedBlockSize);
+                ApplyDictionarySize(result.RecommendedBaseDictionarySize);
+
+                // Each target's own dictionary is analyzed and recommended independently
+                // (see AnalyzePair's remarks) - applied to that target's own dropdown, a
+                // real RomEntryViewModel instance in its own right (private access to a
+                // sibling instance's members is legal within the declaring type), not
+                // just reported as text.
+                for (int i = 0; i < Targets.Count; i++)
+                    Targets[i].ApplyDictionarySize(result.RecommendedTargetDictionarySizes[i]);
+
+                string targetDicts = string.Join(", ", result.RecommendedTargetDictionarySizes.Select(t => SizeOption.FromBytes(t).Label));
+                AnalysisResultText = $"Recommended: {SizeOption.FromBytes(result.RecommendedBlockSize).Label} block · " +
+                    $"base dict {SizeOption.FromBytes(result.RecommendedBaseDictionarySize).Label} · " +
+                    $"target dict(s) {targetDicts} · ~{ratio:0.#}x";
+            }
+        }
+        catch (Exception ex)
+        {
+            AnalysisError = $"Analyze failed: {ex.Message}";
+        }
+        finally
+        {
+            IsAnalyzing = false;
+        }
+    }
+
+    private void ApplyBlockSize(int bytes) =>
+        SelectedBlockSize = BlockSizeOptions.First(o => o.Bytes == bytes);
+
+    private void ApplyDictionarySize(int bytes)
+    {
+        if (!DictionarySizeOptions.Any(o => o.Bytes == bytes))
+            DictionarySizeOptions.Add(SizeOption.FromBytes(bytes));
+        SelectedDictionarySize = DictionarySizeOptions.First(o => o.Bytes == bytes);
+    }
+
+    /// <summary>
+    /// Packs this card to <paramref name="outputPath"/> - the destination is resolved by
+    /// the view (a save-file dialog needs a Window/StorageProvider this plain view model
+    /// doesn't have), everything else happens here. Block size is shared (one choice for
+    /// the whole pack, base and every target - the format itself only ever has one block
+    /// size per file). Dictionary size is fully independent per ROM: this card's own
+    /// dropdown decides the base's, and each target chip has its own separate dropdown
+    /// (also a real RomEntryViewModel, just nested) that decides that target's - "Auto"
+    /// on either resolves via the real Core analyzers at pack time, never silently
+    /// skipped, same as the CLI's own `--block-size auto`/`--raw-dict auto`; an explicit
+    /// selection is used as-is. Nothing here broadcasts one shared dictionary size to
+    /// every target - each is read from that specific target's own selection.
+    /// Round-trip-verifies the written file before reporting success, on by default,
+    /// matching the CLI's own default (`ndztool.py`'s comment: "so what gets verified is
+    /// the file on disk read back the way this tool will actually read it").
+    /// </summary>
+    public async Task PackAsync(string outputPath)
+    {
+        IsPacking = true;
+        PackError = null;
+        PackResultText = null;
+        try
+        {
+            long outputSize = await Task.Run(() => PackAndVerify(outputPath));
+            PackResultText = $"Packed \"{Path.GetFileName(outputPath)}\" ({SizeOption.FromBytes((int)Math.Min(outputSize, int.MaxValue)).Label}) - verified byte-exact.";
+        }
+        catch (Exception ex)
+        {
+            PackError = $"Pack failed: {ex.Message}";
+        }
+        finally
+        {
+            IsPacking = false;
+        }
+    }
+
+    private long PackAndVerify(string outputPath)
+    {
+        byte[] baseRom = File.ReadAllBytes(FilePath);
+        int? blockSizeOverride = SelectedBlockSize.Bytes;
+        int? dictSizeOverride = SelectedDictionarySize.Bytes;
+
+        if (Targets.Count == 0)
+        {
+            int blockSize = blockSizeOverride ?? BlockSizeAnalyzer.Analyze(baseRom, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedBlockSize;
+            int dictSize = dictSizeOverride ?? DictionaryAnalyzer.Analyze(baseRom, null, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedDictionarySize;
+
+            using (FileStream output = File.Create(outputPath))
+                NdzWriter.Compress(baseRom, output, blockSize: blockSize, rawDictionarySize: dictSize, maxDegreeOfParallelism: MaxDegreeOfParallelism);
+
+            byte[] decoded;
+            using (NdzArchive archive = NdzArchive.Open(File.ReadAllBytes(outputPath)))
+                decoded = archive.DecompressAll();
+            if (!decoded.AsSpan().SequenceEqual(baseRom))
+                throw new InvalidDataException("round-trip check failed - the packed file didn't decode back to the original ROM byte-for-byte.");
+        }
+        else
+        {
+            byte[][] targetRoms = Targets.Select(t => File.ReadAllBytes(t.FilePath)).ToArray();
+            int blockSize = blockSizeOverride ?? BlockSizeAnalyzer.AnalyzePair(baseRom, targetRoms, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedBlockSize;
+
+            int baseDictSize = dictSizeOverride ?? DictionaryAnalyzer.Analyze(baseRom, null, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedDictionarySize;
+
+            // Each target's dictionary is its own independent choice now (its own
+            // dropdown, a real per-target control) - Auto there resolves independently
+            // per target here, same as the base does above; an explicit per-target
+            // selection is used as-is. Nothing here broadcasts one shared size to every
+            // target anymore.
+            var targetDictSizes = new int?[targetRoms.Length];
+            for (int i = 0; i < targetRoms.Length; i++)
+            {
+                int? targetOverride = Targets[i].SelectedDictionarySize.Bytes;
+                targetDictSizes[i] = targetOverride ?? DictionaryAnalyzer.Analyze(targetRoms[i], baseRom, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedDictionarySize;
+            }
+
+            using (FileStream output = File.Create(outputPath))
+                NdzPairWriter.Write(output, baseRom, targetRoms, blockSize: blockSize, rawDictionarySize: baseDictSize, targetDictionarySizes: targetDictSizes, maxDegreeOfParallelism: MaxDegreeOfParallelism);
+
+            NdzPairContainer pair = NdzPairContainer.ReadFile(outputPath);
+            if (pair.Entries.Count != 1 + targetRoms.Length)
+                throw new InvalidDataException($"wrote a {pair.Entries.Count}-entry pair container, expected {1 + targetRoms.Length}.");
+
+            if (!pair.DecompressEntry(pair.PlainEntryIndex).AsSpan().SequenceEqual(baseRom))
+                throw new InvalidDataException("round-trip check failed on the base entry.");
+
+            int targetIndex = 0;
+            for (int i = 0; i < pair.Entries.Count; i++)
+            {
+                if (i == pair.PlainEntryIndex)
+                    continue;
+                if (!pair.DecompressEntry(i).AsSpan().SequenceEqual(targetRoms[targetIndex]))
+                    throw new InvalidDataException($"round-trip check failed on target entry \"{Targets[targetIndex].ShortTitle}\".");
+                targetIndex++;
+            }
+        }
+
+        return new FileInfo(outputPath).Length;
+    }
 }
