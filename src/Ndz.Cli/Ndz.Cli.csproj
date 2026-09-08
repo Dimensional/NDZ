@@ -10,6 +10,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Ndz.Cli</RootNamespace>
+    <!-- The project/folder stays Ndz.Cli (namespace, solution layout), but the built
+         binary is named plain "ndz" (ndz.exe on Windows) so the README's usage lines
+         ("ndz compress ...") are the literal, runnable command - not ndz.cli.exe. -->
+    <AssemblyName>ndz</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

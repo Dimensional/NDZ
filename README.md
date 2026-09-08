@@ -113,6 +113,15 @@ dotnet build NDZ.slnx
 dotnet test NDZ.slnx
 ```
 
+To produce the standalone `ndz`/`ndz.exe` binary used in the Usage examples above:
+
+```
+dotnet publish src/Ndz.Cli/Ndz.Cli.csproj -c Release -r <RID>
+```
+
+(`<RID>` e.g. `win-x64`, `linux-x64`, `osx-arm64` — the output lands in
+`src/Ndz.Cli/bin/Release/net10.0/<RID>/publish/`.)
+
 ## Layout
 
 - `src/Ndz.Core` — format types (`NdzFrontMatter`, `NdzFlags`, ...) and the
