@@ -22,10 +22,10 @@ jobs:
       # AssemblyInformationalVersion; the default shallow checkout doesn't reliably carry
       # tag history, which would make that fall back to a bare commit hash instead of a
       # real "vX.Y.Z-N-gHASH" string.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - run: dotnet restore NDZ.slnx
@@ -47,10 +47,10 @@ jobs:
     steps:
       # fetch-depth: 0 - see the test job's own comment above; these are the actual
       # binaries end users download, so an accurate version stamp matters most here.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Publish self-contained ${{ matrix.rid }}
@@ -69,7 +69,7 @@ jobs:
               tar czf "../../ndz-${{ matrix.rid }}.tar.gz" .
               ;;
           esac
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ndz-${{ matrix.rid }}
           path: ndz-${{ matrix.rid }}.*
@@ -85,10 +85,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 - see the test job's own comment above.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Publish framework-dependent (portable)
@@ -97,7 +97,7 @@ jobs:
           -p:SelfContained=false -p:PublishSingleFile=false -p:PublishTrimmed=false
       - name: Package
         run: tar czf ndz-portable.tar.gz -C out/portable .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ndz-portable
           path: ndz-portable.tar.gz
@@ -112,8 +112,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
