@@ -1,0 +1,44 @@
+<Project>
+  <PropertyGroup>
+    <!-- The SDK's own SourceControl integration otherwise appends "+<full 40-char commit
+         SHA>" to InformationalVersion automatically, on top of whatever this file sets
+         below - redundant (the short hash from `git describe` below is already enough to
+         identify the commit) and needlessly long for something meant to just be read at
+         a glance. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!--
+    Computes a real version string from git (nearest tag, commits since, short hash, and
+    a "-dirty" suffix if the working tree has uncommitted changes - e.g.
+    "v0.0.1-10-g4994c75-dirty", or just "v0.0.1" exactly at a tagged commit) for every
+    project's own AssemblyInformationalVersion, instead of leaving every binary at the
+    SDK's own unset-version default (a meaningless "1.0.0.0" with no relationship to any
+    real release or commit). Read via Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+    - see Ndz.Gui's AboutWindow for the actual consumer.
+
+    Only ever sets $(InformationalVersion) - never $(Version)/$(AssemblyVersion)/
+    $(FileVersion), which must be strict Major.Minor.Build.Revision and would fail to
+    parse against a git-describe string. InformationalVersion has no such restriction,
+    so this is a purely additive, zero-risk piece of metadata.
+
+    Best-effort: if git itself isn't on PATH, this isn't a git checkout at all (e.g. a
+    source-only tarball with no .git folder), or the repo has no tags yet, this falls
+    back to a plain "0.0.0-unknown" rather than fail the build - a cosmetic version
+    string is never worth breaking a build over.
+  -->
+  <Target Name="ComputeGitInformationalVersion" BeforeTargets="GetAssemblyVersion;CoreCompile" Condition="'$(InformationalVersion)' == ''">
+    <Exec Command="git describe --tags --always --dirty"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          IgnoreExitCode="true"
+          WorkingDirectory="$(MSBuildThisFileDirectory)">
+      <Output TaskParameter="ConsoleOutput" ItemName="_GitDescribeOutput"/>
+      <Output TaskParameter="ExitCode" PropertyName="_GitDescribeExitCode"/>
+    </Exec>
+    <PropertyGroup>
+      <InformationalVersion Condition="'$(_GitDescribeExitCode)' == '0' And '@(_GitDescribeOutput)' != ''">@(_GitDescribeOutput)</InformationalVersion>
+      <InformationalVersion Condition="'$(InformationalVersion)' == ''">0.0.0-unknown</InformationalVersion>
+    </PropertyGroup>
+  </Target>
+</Project>

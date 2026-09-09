@@ -17,7 +17,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history, including tags) - Directory.Build.targets runs
+      # `git describe --tags` at build time to stamp every assembly's
+      # AssemblyInformationalVersion; the default shallow checkout doesn't reliably carry
+      # tag history, which would make that fall back to a bare commit hash instead of a
+      # real "vX.Y.Z-N-gHASH" string.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
@@ -38,7 +45,11 @@ jobs:
       matrix:
         rid: [win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64]
     steps:
+      # fetch-depth: 0 - see the test job's own comment above; these are the actual
+      # binaries end users download, so an accurate version stamp matters most here.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
@@ -73,7 +84,10 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 - see the test job's own comment above.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
