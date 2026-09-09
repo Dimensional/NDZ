@@ -8,63 +8,68 @@
         x:Class="Ndz.Gui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Width="1000" Height="640"
-        Background="#14161A"
+        Background="{DynamicResource Surface.Window}"
         Title="NDZ Forge">
 
     <Design.DataContext>
         <vm:MainWindowViewModel/>
     </Design.DataContext>
 
+    <!-- Colors throughout this file are {DynamicResource Token.Name} references into
+         whichever Themes/*.axaml dictionary ThemeService currently has merged into
+         Application.Resources - never hardcoded hex, so switching theme (see the Theme
+         menu) restyles every card/control here automatically. Sizes, spacing, radii, and
+         font weights stay fixed across themes - only color tokens vary. -->
     <Window.Styles>
         <Style Selector="Button.ghost">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderBrush" Value="#3A3F4B"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Ghost}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="7"/>
-            <Setter Property="Foreground" Value="#E8EAEE"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
             <Setter Property="Padding" Value="12,7"/>
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
         <Style Selector="Button.ghost:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#1C1F26"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Card}"/>
         </Style>
         <Style Selector="Button.iconbtn">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
             <Setter Property="Padding" Value="4"/>
             <Setter Property="CornerRadius" Value="5"/>
         </Style>
         <Style Selector="Button.iconbtn:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#262A33"/>
-            <Setter Property="TextBlock.Foreground" Value="#E5636B"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Hover}"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource Text.Error}"/>
         </Style>
         <Style Selector="Button.chipx">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
             <Setter Property="Padding" Value="2"/>
             <Setter Property="CornerRadius" Value="4"/>
         </Style>
         <Style Selector="Button.chipx:pointerover /template/ ContentPresenter">
-            <Setter Property="TextBlock.Foreground" Value="#E5636B"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource Text.Error}"/>
         </Style>
         <Style Selector="Button.targetstrip">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderBrush" Value="#363B46"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Ghost}"/>
             <Setter Property="BorderThickness" Value="1.5"/>
             <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="8,7"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
         <Style Selector="Button.targetstrip:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#20242D"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.CardHover}"/>
         </Style>
         <Style Selector="ComboBox">
-            <Setter Property="Background" Value="#14161A"/>
-            <Setter Property="BorderBrush" Value="#2C303A"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Window}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="7"/>
-            <Setter Property="Foreground" Value="#E8EAEE"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
             <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Padding" Value="8,5"/>
             <Setter Property="MinHeight" Value="0"/>
@@ -72,8 +77,8 @@
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
         </Style>
         <Style Selector="Button.primary">
-            <Setter Property="Background" Value="#5C8DF6"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Background" Value="{DynamicResource Accent.Default}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.OnAccent}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="CornerRadius" Value="7"/>
             <Setter Property="Padding" Value="12,8"/>
@@ -81,15 +86,15 @@
             <Setter Property="FontWeight" Value="Bold"/>
         </Style>
         <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#4E7DE0"/>
+            <Setter Property="Background" Value="{DynamicResource Accent.Hover}"/>
         </Style>
         <Style Selector="Button.primary:disabled /template/ ContentPresenter">
-            <Setter Property="Background" Value="#2C303A"/>
-            <Setter Property="TextBlock.Foreground" Value="#6B7280"/>
+            <Setter Property="Background" Value="{DynamicResource Border.Default}"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource Text.Muted}"/>
         </Style>
         <Style Selector="Button.tab">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#8A90A0"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Tertiary}"/>
             <Setter Property="BorderThickness" Value="0,0,0,2"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="CornerRadius" Value="0"/>
@@ -99,340 +104,371 @@
         </Style>
         <Style Selector="Button.tab:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="TextBlock.Foreground" Value="#C7CCD4"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource Text.Secondary}"/>
         </Style>
         <Style Selector="Button.tab.active">
-            <Setter Property="Foreground" Value="#E8EAEE"/>
-            <Setter Property="BorderBrush" Value="#5C8DF6"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent.Default}"/>
         </Style>
         <Style Selector="TextBlock.checkresult">
-            <Setter Property="Foreground" Value="#E5636B"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Error}"/>
         </Style>
         <Style Selector="TextBlock.checkresult.match">
-            <Setter Property="Foreground" Value="#4FBE83"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Success}"/>
         </Style>
         <Style Selector="TextBox">
-            <Setter Property="Background" Value="#14161A"/>
-            <Setter Property="BorderBrush" Value="#2C303A"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Window}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="7"/>
-            <Setter Property="Foreground" Value="#E8EAEE"/>
-            <Setter Property="CaretBrush" Value="#E8EAEE"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource Text.Primary}"/>
         </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="52,*">
+    <DockPanel>
 
-        <!-- Header -->
-        <Border Grid.Row="0" Background="#181A20" BorderBrush="#2C303A" BorderThickness="0,0,0,1">
-            <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="18,0">
-                <TextBlock Grid.Column="0" Text="NDZ Forge" Foreground="#E8EAEE" FontSize="15" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,24,0"/>
+        <!-- Menu bar -->
+        <Menu DockPanel.Dock="Top" Background="{DynamicResource Surface.Header}">
+            <MenuItem Header="_File">
+                <MenuItem Header="Open ROM…" Click="OnOpenRomClicked" IsVisible="{Binding !ShowExamine}"/>
+                <MenuItem Header="Open File…" Click="OnExamineOpenFileClicked" IsVisible="{Binding ShowExamine}"/>
+                <MenuItem Header="Add Folder…" Click="OnAddFolderClicked" IsVisible="{Binding !ShowExamine}"/>
+                <MenuItem Header="Add Folder…" Click="OnExamineAddFolderClicked" IsVisible="{Binding ShowExamine}"/>
+                <Separator/>
+                <MenuItem Header="Exit" Click="OnExitClicked"/>
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="Pack" Command="{Binding ShowPackTabCommand}"/>
+                <MenuItem Header="Examine" Command="{Binding ShowExamineTabCommand}"/>
+                <Separator/>
+                <MenuItem Header="Theme">
+                    <MenuItem Header="Light" Click="OnThemeLightClicked"/>
+                    <MenuItem Header="Dark" Click="OnThemeDarkClicked"/>
+                    <MenuItem Header="System" Click="OnThemeSystemClicked"/>
+                    <MenuItem Header="Signature" Click="OnThemeSignatureClicked"/>
+                </MenuItem>
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="About NDZ Forge…" Click="OnAboutClicked"/>
+            </MenuItem>
+        </Menu>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Stretch">
-                    <Button Classes="tab" Classes.active="{Binding !ShowExamine}" Content="Pack" Command="{Binding ShowPackTabCommand}" VerticalAlignment="Stretch"/>
-                    <Button Classes="tab" Classes.active="{Binding ShowExamine}" Content="Examine" Command="{Binding ShowExamineTabCommand}" VerticalAlignment="Stretch"/>
-                </StackPanel>
+        <Grid RowDefinitions="52,*">
 
-                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" IsVisible="{Binding !ShowExamine}">
-                    <Button Classes="ghost" Content="Add Folder…" Click="OnAddFolderClicked" VerticalAlignment="Center"/>
-                    <Button Classes="ghost" Content="Open ROM…" Click="OnOpenRomClicked" VerticalAlignment="Center"/>
-                </StackPanel>
-                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" IsVisible="{Binding ShowExamine}">
-                    <Button Classes="ghost" Content="Add Folder…" Click="OnExamineAddFolderClicked" VerticalAlignment="Center"/>
-                    <Button Classes="ghost" Content="Open File…" Click="OnExamineOpenFileClicked" VerticalAlignment="Center"/>
-                </StackPanel>
-            </Grid>
-        </Border>
+            <!-- Header -->
+            <Border Grid.Row="0" Background="{DynamicResource Surface.Header}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="0,0,0,1">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="18,0">
+                    <TextBlock Grid.Column="0" Text="NDZ Forge" Foreground="{DynamicResource Text.Primary}" FontSize="15" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,24,0"/>
 
-        <!-- Body -->
-        <Border Grid.Row="1" Name="DropZone" Background="Transparent">
-            <Grid>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Stretch">
+                        <Button Classes="tab" Classes.active="{Binding !ShowExamine}" Content="Pack" Command="{Binding ShowPackTabCommand}" VerticalAlignment="Stretch"/>
+                        <Button Classes="tab" Classes.active="{Binding ShowExamine}" Content="Examine" Command="{Binding ShowExamineTabCommand}" VerticalAlignment="Stretch"/>
+                    </StackPanel>
 
-            <!-- Pack tab -->
-            <Grid IsVisible="{Binding !ShowExamine}">
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" IsVisible="{Binding !ShowExamine}">
+                        <Button Classes="ghost" Content="Add Folder…" Click="OnAddFolderClicked" VerticalAlignment="Center"/>
+                        <Button Classes="ghost" Content="Open ROM…" Click="OnOpenRomClicked" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" IsVisible="{Binding ShowExamine}">
+                        <Button Classes="ghost" Content="Add Folder…" Click="OnExamineAddFolderClicked" VerticalAlignment="Center"/>
+                        <Button Classes="ghost" Content="Open File…" Click="OnExamineOpenFileClicked" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
 
-                <!-- Empty state -->
-                <StackPanel IsVisible="{Binding !HasItems}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                    <Border Width="52" Height="52" CornerRadius="26" BorderBrush="#454B58" BorderThickness="1.5" HorizontalAlignment="Center">
-                        <TextBlock Text="+" FontSize="22" Foreground="#8A90A0" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-3,0,0"/>
-                    </Border>
-                    <TextBlock Text="Drag .nds/.dsi ROMs or folders here" Foreground="#C7CCD4" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center"/>
-                    <TextBlock Text="folders are searched recursively — drop more anytime" Foreground="#6B7280" FontSize="11.5" HorizontalAlignment="Center"/>
-                </StackPanel>
+            <!-- Body -->
+            <Border Grid.Row="1" Name="DropZone" Background="Transparent">
+                <Grid>
 
-                <!-- Queue grid. Padding lives on the ItemsControl, not the ScrollViewer - Avalonia
-                     12.0.3's ScrollViewer.Padding was empirically confirmed (via a headless layout
-                     repro) to make its own Extent lag the content's true DesiredSize by one full
-                     change-cycle, capping how far the list could actually scroll. Padding here
-                     achieves the same visual inset without touching that property. -->
-                <ScrollViewer IsVisible="{Binding HasItems}">
-                    <ItemsControl Padding="20" ItemsSource="{Binding QueueItems}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RomEntryViewModel">
-                                <!-- Tag identifies this as a valid "add as target" drop zone for code-behind's
-                                     drop hit-test - the WHOLE card counts, not just the strip below, so a drop
-                                     doesn't have to land on one thin line to be recognized. -->
-                                <Border Tag="RomCard" Width="240" Margin="0,0,14,14" Background="#1C1F26" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="10" Padding="14" ToolTip.Tip="{Binding TooltipText}">
-                                    <StackPanel Spacing="10">
+                <!-- Pack tab -->
+                <Grid IsVisible="{Binding !ShowExamine}">
 
-                                        <Grid ColumnDefinitions="Auto,*,Auto">
-                                            <Border Grid.Column="0" Width="48" Height="48" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8">
-                                                <Image Source="{Binding Icon}" Width="36" Height="36" RenderOptions.BitmapInterpolationMode="None"/>
-                                            </Border>
-                                            <StackPanel Grid.Column="1" Margin="10,0,4,0" Spacing="5" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding ShortTitle}" Foreground="#E8EAEE" FontSize="13.5" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-                                                <StackPanel Orientation="Horizontal" Spacing="5">
-                                                    <Border Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="5" Padding="6,2" HorizontalAlignment="Left">
-                                                        <TextBlock Text="{Binding GameCode}" Foreground="#9AA1AD" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                    </Border>
-                                                    <Border IsVisible="{Binding HasRevision}" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="5" Padding="6,2" HorizontalAlignment="Left">
-                                                        <TextBlock Text="{Binding RevisionText}" Foreground="#9AA1AD" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                    </Border>
+                    <!-- Empty state -->
+                    <StackPanel IsVisible="{Binding !HasItems}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                        <Border Width="52" Height="52" CornerRadius="26" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1.5" HorizontalAlignment="Center">
+                            <TextBlock Text="+" FontSize="22" Foreground="{DynamicResource Text.Tertiary}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-3,0,0"/>
+                        </Border>
+                        <TextBlock Text="Drag .nds/.dsi ROMs, folders, or .zip/.7z/.rar archives here" Foreground="{DynamicResource Text.Secondary}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center"/>
+                        <TextBlock Text="folders are searched recursively — drop more anytime" Foreground="{DynamicResource Text.Muted}" FontSize="11.5" HorizontalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Queue grid. Padding lives on the ItemsControl, not the ScrollViewer - Avalonia
+                         12.0.3's ScrollViewer.Padding was empirically confirmed (via a headless layout
+                         repro) to make its own Extent lag the content's true DesiredSize by one full
+                         change-cycle, capping how far the list could actually scroll. Padding here
+                         achieves the same visual inset without touching that property. -->
+                    <ScrollViewer IsVisible="{Binding HasItems}">
+                        <ItemsControl Padding="20" ItemsSource="{Binding QueueItems}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RomEntryViewModel">
+                                    <!-- Tag identifies this as a valid "add as target" drop zone for code-behind's
+                                         drop hit-test - the WHOLE card counts, not just the strip below, so a drop
+                                         doesn't have to land on one thin line to be recognized. -->
+                                    <Border Tag="RomCard" Width="240" Margin="0,0,14,14" Background="{DynamicResource Surface.Card}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="10" Padding="14" ToolTip.Tip="{Binding TooltipText}">
+                                        <StackPanel Spacing="10">
+
+                                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                                <Border Grid.Column="0" Width="48" Height="48" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="8">
+                                                    <Image Source="{Binding Icon}" Width="36" Height="36" RenderOptions.BitmapInterpolationMode="None"/>
+                                                </Border>
+                                                <StackPanel Grid.Column="1" Margin="10,0,4,0" Spacing="5" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ShortTitle}" Foreground="{DynamicResource Text.Primary}" FontSize="13.5" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+                                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                                        <Border Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="5" Padding="6,2" HorizontalAlignment="Left">
+                                                            <TextBlock Text="{Binding GameCode}" Foreground="{DynamicResource Text.Tertiary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                        </Border>
+                                                        <Border IsVisible="{Binding HasRevision}" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="5" Padding="6,2" HorizontalAlignment="Left">
+                                                            <TextBlock Text="{Binding RevisionText}" Foreground="{DynamicResource Text.Tertiary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                        </Border>
+                                                    </StackPanel>
                                                 </StackPanel>
-                                            </StackPanel>
-                                            <Button Grid.Column="2" Classes="iconbtn" Command="{Binding RemoveCommand}" VerticalAlignment="Top" Content="✕" FontSize="10"/>
-                                        </Grid>
+                                                <Button Grid.Column="2" Classes="iconbtn" Command="{Binding RemoveCommand}" VerticalAlignment="Top" Content="✕" FontSize="10"/>
+                                            </Grid>
 
-                                        <Border IsVisible="{Binding IsDuplicate}" Background="#2B1F14" BorderBrush="#E0A94D" BorderThickness="1" CornerRadius="6" Padding="8,5">
-                                            <TextBlock Text="Already in queue" Foreground="#E0A94D" FontSize="11" FontWeight="SemiBold"/>
-                                        </Border>
+                                            <Border IsVisible="{Binding IsDuplicate}" Background="{DynamicResource Surface.Warning}" BorderBrush="{DynamicResource Border.Warning}" BorderThickness="1" CornerRadius="6" Padding="8,5">
+                                                <TextBlock Text="Already in queue" Foreground="{DynamicResource Text.Warning}" FontSize="11" FontWeight="SemiBold"/>
+                                            </Border>
 
-                                        <!-- Target chips - this card's patch targets, if any. A plain vertical
-                                             StackPanel (not a WrapPanel) so each chip stretches to the card's full
-                                             content width instead of hugging its own content and leaving a gap -
-                                             the title column below absorbs whatever space the icon/dropdown/remove
-                                             button don't need. -->
-                                        <ItemsControl ItemsSource="{Binding Targets}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Vertical" Spacing="6"/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:RomEntryViewModel">
-                                                    <Border Background="#22262F" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8" Padding="6,5" ToolTip.Tip="{Binding TooltipText}">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
-                                                            <Border Grid.Column="0" Width="20" Height="20" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="3">
-                                                                <Image Source="{Binding Icon}" Width="16" Height="16" RenderOptions.BitmapInterpolationMode="None"/>
-                                                            </Border>
-                                                            <TextBlock Grid.Column="1" Text="{Binding ShortTitle}" Foreground="#C7CCD4" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                                                            <!-- This target's own dictionary size, independent of the base's and every
-                                                                 other target's (block size is shared across the whole pack, so no
-                                                                 per-target block-size control here). -->
-                                                            <ComboBox Grid.Column="2" ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}"
-                                                                      FontSize="9" Padding="5,2" Width="64" HorizontalContentAlignment="Center" VerticalAlignment="Center">
-                                                                <ComboBox.ItemTemplate>
-                                                                    <DataTemplate x:DataType="m:SizeOption">
-                                                                        <TextBlock Text="{Binding Label}"/>
-                                                                    </DataTemplate>
-                                                                </ComboBox.ItemTemplate>
-                                                            </ComboBox>
-                                                            <Button Grid.Column="3" Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
-                                                        </Grid>
-                                                    </Border>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-
-                                        <!-- Drop a fresh ROM anywhere on this card, or click to browse - both add it as this card's patch target. DataContext here is this card's own RomEntryViewModel (inherited). -->
-                                        <Button Classes="targetstrip" Click="OnAddTargetClicked">
-                                            <TextBlock Text="+ drop a ROM here or click to browse" Foreground="#6B7280" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"/>
-                                        </Button>
-
-                                        <TextBlock Text="{Binding PlatformText}" Foreground="#6B7280" FontSize="10.5" TextWrapping="Wrap"/>
-                                        <TextBlock Text="{Binding BannerNote}" IsVisible="{Binding HasBannerNote}" Foreground="#6B7280" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap"/>
-                                        <TextBlock Text="{Binding SourceFileText}" Foreground="#6B7280" FontSize="10.5" FontFamily="Consolas,Menlo,monospace" TextTrimming="CharacterEllipsis"/>
-
-                                        <Border Height="1" Background="#262A33"/>
-
-                                        <Grid ColumnDefinitions="*,*">
-                                            <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
-                                                <TextBlock Text="DICTIONARY" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold"/>
-                                                <ComboBox ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}">
-                                                    <ComboBox.ItemTemplate>
-                                                        <DataTemplate x:DataType="m:SizeOption">
-                                                            <TextBlock Text="{Binding Label}"/>
-                                                        </DataTemplate>
-                                                    </ComboBox.ItemTemplate>
-                                                </ComboBox>
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
-                                                <TextBlock Text="BLOCK SIZE" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold"/>
-                                                <ComboBox ItemsSource="{Binding BlockSizeOptions}" SelectedItem="{Binding SelectedBlockSize}">
-                                                    <ComboBox.ItemTemplate>
-                                                        <DataTemplate x:DataType="m:SizeOption">
-                                                            <TextBlock Text="{Binding Label}"/>
-                                                        </DataTemplate>
-                                                    </ComboBox.ItemTemplate>
-                                                </ComboBox>
-                                            </StackPanel>
-                                        </Grid>
-
-                                        <Button Classes="ghost" Content="{Binding AnalyzeButtonText}" Command="{Binding AnalyzeCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-
-                                        <Border IsVisible="{Binding HasAnalysisResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding AnalysisResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-                                        <Border IsVisible="{Binding HasAnalysisError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding AnalysisError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-
-                                        <Button Classes="primary" Content="{Binding PackButtonText}" Click="OnPackClicked" IsEnabled="{Binding !IsPacking}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-
-                                        <Border IsVisible="{Binding HasPackResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding PackResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-                                        <Border IsVisible="{Binding HasPackError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding PackError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-
-                <!-- Error banner -->
-                <Border IsVisible="{Binding HasError}"
-                        Background="#2B1F14" BorderBrush="#E0A94D" BorderThickness="1" CornerRadius="7"
-                        Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="20">
-                    <TextBlock Text="{Binding ErrorMessage}" Foreground="#E0A94D" FontSize="12" TextWrapping="Wrap"/>
-                </Border>
-
-            </Grid>
-
-            <!-- Examine tab -->
-            <Grid IsVisible="{Binding ShowExamine}">
-            <Grid DataContext="{Binding Examine}">
-
-                <!-- Empty state -->
-                <StackPanel IsVisible="{Binding !HasItems}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                    <Border Width="52" Height="52" CornerRadius="26" BorderBrush="#454B58" BorderThickness="1.5" HorizontalAlignment="Center">
-                        <TextBlock Text="🔍" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Text="Drag .ndz / .nds / .dsi files or folders here" Foreground="#C7CCD4" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center"/>
-                    <TextBlock Text="pair containers show every bundled ROM · folders are searched recursively" Foreground="#6B7280" FontSize="11.5" HorizontalAlignment="Center"/>
-                </StackPanel>
-
-                <!-- Source list - see the Pack tab's own queue ScrollViewer above for the Padding remarks. -->
-                <ScrollViewer IsVisible="{Binding HasItems}">
-                    <ItemsControl Padding="20" ItemsSource="{Binding Sources}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Vertical" Spacing="12"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ExamineSourceViewModel">
-                                <Border Background="#1C1F26" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="10" Padding="14">
-                                    <StackPanel Spacing="10">
-
-                                        <Grid ColumnDefinitions="*,Auto,Auto">
-                                            <StackPanel Grid.Column="0" Spacing="2">
-                                                <TextBlock Text="{Binding FileName}" Foreground="#E8EAEE" FontSize="13" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-                                                <TextBlock Text="{Binding HeaderText}" Foreground="#6B7280" FontSize="10.5"/>
-                                            </StackPanel>
-                                            <Button Grid.Column="1" Classes="ghost" Content="{Binding UnpackAllButtonText}" Click="OnUnpackAllClicked" IsVisible="{Binding ShowUnpackAll}" IsEnabled="{Binding !IsUnpackingAll}" VerticalAlignment="Center" FontSize="11" Padding="10,5" Margin="8,0"/>
-                                            <Button Grid.Column="2" Classes="iconbtn" Click="OnRemoveSourceClicked" VerticalAlignment="Top" Content="✕" FontSize="10"/>
-                                        </Grid>
-
-                                        <Border IsVisible="{Binding HasUnpackAllResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding UnpackAllResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-                                        <Border IsVisible="{Binding HasUnpackAllError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                            <TextBlock Text="{Binding UnpackAllError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
-                                        </Border>
-
-                                        <Border Height="1" Background="#262A33"/>
-
-                                        <!-- One row per bundled ROM - just one for a single .ndz or a raw ROM, N for a pair container. -->
-                                        <ItemsControl ItemsSource="{Binding Entries}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Vertical" Spacing="8"/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:ExamineEntryViewModel">
-                                                    <Border Background="#22262F" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="8" Padding="8" ToolTip.Tip="{Binding TooltipText}">
-                                                        <StackPanel Spacing="6">
-                                                            <Grid ColumnDefinitions="Auto,*,Auto">
-                                                                <Border Grid.Column="0" Width="36" Height="36" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="6">
-                                                                    <Image Source="{Binding Icon}" Width="28" Height="28" RenderOptions.BitmapInterpolationMode="None"/>
+                                            <!-- Target chips - this card's patch targets, if any. A plain vertical
+                                                 StackPanel (not a WrapPanel) so each chip stretches to the card's full
+                                                 content width instead of hugging its own content and leaving a gap -
+                                                 the title column below absorbs whatever space the icon/dropdown/remove
+                                                 button don't need. -->
+                                            <ItemsControl ItemsSource="{Binding Targets}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Vertical" Spacing="6"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:RomEntryViewModel">
+                                                        <Border Background="{DynamicResource Surface.Nested}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="8" Padding="6,5" ToolTip.Tip="{Binding TooltipText}">
+                                                            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+                                                                <Border Grid.Column="0" Width="20" Height="20" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="3">
+                                                                    <Image Source="{Binding Icon}" Width="16" Height="16" RenderOptions.BitmapInterpolationMode="None"/>
                                                                 </Border>
-                                                                <StackPanel Grid.Column="1" Margin="10,0,4,0" Spacing="3" VerticalAlignment="Center">
-                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                                                        <TextBlock Text="{Binding ShortTitle}" Foreground="#E8EAEE" FontSize="12.5" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-                                                                        <TextBlock Text="{Binding GameCode}" Foreground="#9AA1AD" FontFamily="Consolas,Menlo,monospace" FontSize="10"/>
-                                                                    </StackPanel>
-                                                                    <TextBlock Text="{Binding SummaryText}" Foreground="#8A90A0" FontSize="10.5" TextWrapping="Wrap"/>
-                                                                </StackPanel>
-                                                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                                                    <Button Classes="ghost" Content="{Binding ChecksumsButtonText}" Click="OnChecksumsClicked" IsEnabled="{Binding !IsComputingChecksums}" FontSize="11" Padding="10,5"/>
-                                                                    <Button Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding !IsUnpacking}" FontSize="11" Padding="10,5"/>
-                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="1" Text="{Binding ShortTitle}" Foreground="{DynamicResource Text.Secondary}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                                <!-- This target's own dictionary size, independent of the base's and every
+                                                                     other target's (block size is shared across the whole pack, so no
+                                                                     per-target block-size control here). -->
+                                                                <ComboBox Grid.Column="2" ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}"
+                                                                          FontSize="9" Padding="5,2" Width="64" HorizontalContentAlignment="Center" VerticalAlignment="Center">
+                                                                    <ComboBox.ItemTemplate>
+                                                                        <DataTemplate x:DataType="m:SizeOption">
+                                                                            <TextBlock Text="{Binding Label}"/>
+                                                                        </DataTemplate>
+                                                                    </ComboBox.ItemTemplate>
+                                                                </ComboBox>
+                                                                <Button Grid.Column="3" Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
                                                             </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
 
-                                                            <Border IsVisible="{Binding HasUnpackResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="7,5">
-                                                                <TextBlock Text="{Binding UnpackResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
-                                                            </Border>
-                                                            <Border IsVisible="{Binding HasUnpackError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="7,5">
-                                                                <TextBlock Text="{Binding UnpackError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
-                                                            </Border>
+                                            <!-- Drop a fresh ROM anywhere on this card, or click to browse - both add it as this card's patch target. DataContext here is this card's own RomEntryViewModel (inherited).
+                                                 Hidden while pair-container creation is disabled (RomEntryViewModel.PairPackingEnabled) - see the note below instead. -->
+                                            <Button Classes="targetstrip" Click="OnAddTargetClicked" IsVisible="{Binding PairPackingEnabled}">
+                                                <TextBlock Text="+ drop a ROM here or click to browse" Foreground="{DynamicResource Text.Muted}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"/>
+                                            </Button>
+                                            <TextBlock IsVisible="{Binding !PairPackingEnabled}" Text="Combining ROMs into one file is temporarily disabled" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap" TextAlignment="Center"/>
 
-                                                            <!-- Computed checksums - four hex strings plus a live "paste one, see if it matches" box (RomChecksum.Matches auto-detects which of the four by length). -->
-                                                            <Border IsVisible="{Binding HasChecksums}" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="7" Padding="8,6">
-                                                                <StackPanel Spacing="5">
-                                                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="2" ColumnSpacing="8">
-                                                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="CRC32" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
-                                                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Crc32Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="MD5" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
-                                                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Md5Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="SHA-1" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
-                                                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Sha1Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="SHA-256" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
-                                                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Sha256Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
-                                                                    </Grid>
+                                            <TextBlock Text="{Binding PlatformText}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding BannerNote}" IsVisible="{Binding HasBannerNote}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding SourceFileText}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontFamily="Consolas,Menlo,monospace" TextTrimming="CharacterEllipsis"/>
 
-                                                                    <Border Height="1" Background="#262A33" Margin="0,2"/>
+                                            <Border Height="1" Background="{DynamicResource Border.Divider}"/>
 
-                                                                    <TextBox Text="{Binding ExpectedChecksumInput}" PlaceholderText="Paste a checksum to verify (CRC32/MD5/SHA-1/SHA-256)" FontFamily="Consolas,Menlo,monospace" FontSize="10.5" Padding="6,4"/>
-                                                                    <TextBlock Text="{Binding MatchResultText}" IsVisible="{Binding HasMatchResult}" Classes="checkresult" Classes.match="{Binding MatchSucceeded}" FontSize="10.5" FontWeight="Bold"/>
-                                                                </StackPanel>
-                                                            </Border>
-                                                            <Border IsVisible="{Binding HasChecksumError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="7,5">
-                                                                <TextBlock Text="{Binding ChecksumError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
-                                                            </Border>
-                                                        </StackPanel>
-                                                    </Border>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            <Grid ColumnDefinitions="*,*">
+                                                <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
+                                                    <TextBlock Text="DICTIONARY" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold"/>
+                                                    <ComboBox ItemsSource="{Binding DictionarySizeOptions}" SelectedItem="{Binding SelectedDictionarySize}">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="m:SizeOption">
+                                                                <TextBlock Text="{Binding Label}"/>
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
+                                                    <TextBlock Text="BLOCK SIZE" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold"/>
+                                                    <ComboBox ItemsSource="{Binding BlockSizeOptions}" SelectedItem="{Binding SelectedBlockSize}">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate x:DataType="m:SizeOption">
+                                                                <TextBlock Text="{Binding Label}"/>
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+                                                </StackPanel>
+                                            </Grid>
 
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                                            <Button Classes="ghost" Content="{Binding AnalyzeButtonText}" Command="{Binding AnalyzeCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
 
-                <!-- Error banner -->
-                <Border IsVisible="{Binding HasError}"
-                        Background="#2B1F14" BorderBrush="#E0A94D" BorderThickness="1" CornerRadius="7"
-                        Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="20">
-                    <TextBlock Text="{Binding ErrorMessage}" Foreground="#E0A94D" FontSize="12" TextWrapping="Wrap"/>
-                </Border>
+                                            <Border IsVisible="{Binding HasAnalysisResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding AnalysisResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <Border IsVisible="{Binding HasAnalysisError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding AnalysisError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
 
-            </Grid>
-            </Grid>
+                                            <Button Classes="primary" Content="{Binding PackButtonText}" Click="OnPackClicked" IsEnabled="{Binding !IsPacking}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
 
-            </Grid>
-        </Border>
-    </Grid>
+                                            <Border IsVisible="{Binding HasPackResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding PackResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <Border IsVisible="{Binding HasPackError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding PackError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- Error banner -->
+                    <Border IsVisible="{Binding HasError}"
+                            Background="{DynamicResource Surface.Warning}" BorderBrush="{DynamicResource Border.Warning}" BorderThickness="1" CornerRadius="7"
+                            Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="20">
+                        <TextBlock Text="{Binding ErrorMessage}" Foreground="{DynamicResource Text.Warning}" FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
+
+                </Grid>
+
+                <!-- Examine tab -->
+                <Grid IsVisible="{Binding ShowExamine}">
+                <Grid DataContext="{Binding Examine}">
+
+                    <!-- Empty state -->
+                    <StackPanel IsVisible="{Binding !HasItems}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                        <Border Width="52" Height="52" CornerRadius="26" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1.5" HorizontalAlignment="Center">
+                            <TextBlock Text="🔍" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Text="Drag .ndz / .nds / .dsi files, folders, or .zip/.7z/.rar archives here" Foreground="{DynamicResource Text.Secondary}" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center"/>
+                        <TextBlock Text="pair containers show every bundled ROM · folders are searched recursively" Foreground="{DynamicResource Text.Muted}" FontSize="11.5" HorizontalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Source list - see the Pack tab's own queue ScrollViewer above for the Padding remarks. -->
+                    <ScrollViewer IsVisible="{Binding HasItems}">
+                        <ItemsControl Padding="20" ItemsSource="{Binding Sources}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Vertical" Spacing="12"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ExamineSourceViewModel">
+                                    <Border Background="{DynamicResource Surface.Card}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="10" Padding="14">
+                                        <StackPanel Spacing="10">
+
+                                            <Grid ColumnDefinitions="*,Auto,Auto">
+                                                <StackPanel Grid.Column="0" Spacing="2">
+                                                    <TextBlock Text="{Binding FileName}" Foreground="{DynamicResource Text.Primary}" FontSize="13" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding HeaderText}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Classes="ghost" Content="{Binding UnpackAllButtonText}" Click="OnUnpackAllClicked" IsVisible="{Binding ShowUnpackAll}" IsEnabled="{Binding !IsUnpackingAll}" VerticalAlignment="Center" FontSize="11" Padding="10,5" Margin="8,0"/>
+                                                <Button Grid.Column="2" Classes="iconbtn" Click="OnRemoveSourceClicked" VerticalAlignment="Top" Content="✕" FontSize="10"/>
+                                            </Grid>
+
+                                            <Border IsVisible="{Binding HasUnpackAllResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding UnpackAllResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <Border IsVisible="{Binding HasUnpackAllError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding UnpackAllError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+
+                                            <Border Height="1" Background="{DynamicResource Border.Divider}"/>
+
+                                            <!-- One row per bundled ROM - just one for a single .ndz or a raw ROM, N for a pair container. -->
+                                            <ItemsControl ItemsSource="{Binding Entries}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Vertical" Spacing="8"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:ExamineEntryViewModel">
+                                                        <Border Background="{DynamicResource Surface.Nested}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="8" Padding="8" ToolTip.Tip="{Binding TooltipText}">
+                                                            <StackPanel Spacing="6">
+                                                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                                                    <Border Grid.Column="0" Width="36" Height="36" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="6">
+                                                                        <Image Source="{Binding Icon}" Width="28" Height="28" RenderOptions.BitmapInterpolationMode="None"/>
+                                                                    </Border>
+                                                                    <StackPanel Grid.Column="1" Margin="10,0,4,0" Spacing="3" VerticalAlignment="Center">
+                                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                            <TextBlock Text="{Binding ShortTitle}" Foreground="{DynamicResource Text.Primary}" FontSize="12.5" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+                                                                            <TextBlock Text="{Binding GameCode}" Foreground="{DynamicResource Text.Tertiary}" FontFamily="Consolas,Menlo,monospace" FontSize="10"/>
+                                                                        </StackPanel>
+                                                                        <TextBlock Text="{Binding SummaryText}" Foreground="{DynamicResource Text.Tertiary}" FontSize="10.5" TextWrapping="Wrap"/>
+                                                                    </StackPanel>
+                                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                                        <Button Classes="ghost" Content="{Binding ChecksumsButtonText}" Click="OnChecksumsClicked" IsEnabled="{Binding !IsComputingChecksums}" FontSize="11" Padding="10,5"/>
+                                                                        <Button Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding !IsUnpacking}" FontSize="11" Padding="10,5"/>
+                                                                    </StackPanel>
+                                                                </Grid>
+
+                                                                <Border IsVisible="{Binding HasUnpackResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="7,5">
+                                                                    <TextBlock Text="{Binding UnpackResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>
+                                                                </Border>
+                                                                <Border IsVisible="{Binding HasUnpackError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="7,5">
+                                                                    <TextBlock Text="{Binding UnpackError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                                                </Border>
+
+                                                                <!-- Computed checksums - four hex strings plus a live "paste one, see if it matches" box (RomChecksum.Matches auto-detects which of the four by length). -->
+                                                                <Border IsVisible="{Binding HasChecksums}" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                                    <StackPanel Spacing="5">
+                                                                        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="2" ColumnSpacing="8">
+                                                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="CRC32" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Crc32Text}" Foreground="{DynamicResource Text.Secondary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="MD5" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Md5Text}" Foreground="{DynamicResource Text.Secondary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="SHA-1" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Sha1Text}" Foreground="{DynamicResource Text.Secondary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                            <TextBlock Grid.Row="3" Grid.Column="0" Text="SHA-256" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Sha256Text}" Foreground="{DynamicResource Text.Secondary}" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                        </Grid>
+
+                                                                        <Border Height="1" Background="{DynamicResource Border.Divider}" Margin="0,2"/>
+
+                                                                        <TextBox Text="{Binding ExpectedChecksumInput}" PlaceholderText="Paste a checksum to verify (CRC32/MD5/SHA-1/SHA-256)" FontFamily="Consolas,Menlo,monospace" FontSize="10.5" Padding="6,4"/>
+                                                                        <TextBlock Text="{Binding MatchResultText}" IsVisible="{Binding HasMatchResult}" Classes="checkresult" Classes.match="{Binding MatchSucceeded}" FontSize="10.5" FontWeight="Bold"/>
+                                                                    </StackPanel>
+                                                                </Border>
+                                                                <Border IsVisible="{Binding HasChecksumError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="7,5">
+                                                                    <TextBlock Text="{Binding ChecksumError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                                                </Border>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- Error banner -->
+                    <Border IsVisible="{Binding HasError}"
+                            Background="{DynamicResource Surface.Warning}" BorderBrush="{DynamicResource Border.Warning}" BorderThickness="1" CornerRadius="7"
+                            Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="20">
+                        <TextBlock Text="{Binding ErrorMessage}" Foreground="{DynamicResource Text.Warning}" FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
+
+                </Grid>
+                </Grid>
+
+                </Grid>
+            </Border>
+        </Grid>
+    </DockPanel>
 
 </Window>

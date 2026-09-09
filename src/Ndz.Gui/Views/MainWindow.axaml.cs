@@ -4,16 +4,34 @@ using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
+using Ndz.Core.Archives;
+using Ndz.Core.Compression;
+using Ndz.Gui.Services;
 using Ndz.Gui.ViewModels;
 
 namespace Ndz.Gui.Views;
 
 public partial class MainWindow : Window
 {
+    /// <summary>Shared file-picker filter for the Pack tab's own "Open ROM…"/"Add target" pickers - a real .nds/.dsi ROM, or a .zip/.7z/.rar archive holding some (see <see cref="ArchiveExtractor"/>).</summary>
+    private static readonly IReadOnlyList<FilePickerFileType> RomPickerFileTypes =
+    [
+        new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] },
+        new FilePickerFileType("Archive") { Patterns = ["*.zip", "*.7z", "*.rar"] },
+    ];
+
+    /// <summary>Same idea as <see cref="RomPickerFileTypes"/>, for Examine's own "Open File…" picker, which also accepts .ndz.</summary>
+    private static readonly IReadOnlyList<FilePickerFileType> ExaminePickerFileTypes =
+    [
+        new FilePickerFileType("NDZ / NDS / DSi") { Patterns = ["*.ndz", "*.nds", "*.dsi"] },
+        new FilePickerFileType("Archive") { Patterns = ["*.zip", "*.7z", "*.rar"] },
+    ];
+
     public MainWindow()
     {
         InitializeComponent();
@@ -55,7 +73,11 @@ public partial class MainWindow : Window
         // top-level card. e.Source is the actual visual under the pointer at drop time -
         // walk up from there looking for the card marker (Tag="RomCard"), whose
         // DataContext is that card's own RomEntryViewModel (inherited from its DataTemplate).
-        RomEntryViewModel? targetBase = (e.Source as Visual)?
+        // Skipped entirely while pair-container creation is disabled (RomEntryViewModel.
+        // PairPackingEnabled) - a drop on a card just falls through to a normal top-level
+        // add instead, same as landing anywhere else, rather than surfacing an error for
+        // an interaction the UI no longer visibly offers.
+        RomEntryViewModel? targetBase = !PairContainerPolicy.CreationEnabled ? null : (e.Source as Visual)?
             .GetSelfAndVisualAncestors()
             .OfType<Control>()
             .FirstOrDefault(c => Equals(c.Tag, "RomCard"))
@@ -74,9 +96,9 @@ public partial class MainWindow : Window
 
         IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Open .nds / .dsi ROM(s)",
+            Title = "Open .nds / .dsi ROM(s) or a .zip/.7z/.rar archive",
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] }],
+            FileTypeFilter = RomPickerFileTypes,
         });
 
         string[] paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
@@ -96,7 +118,7 @@ public partial class MainWindow : Window
         {
             Title = $"Add patch target for \"{baseItem.ShortTitle}\"",
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] }],
+            FileTypeFilter = RomPickerFileTypes,
         });
 
         string[] paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
@@ -114,9 +136,8 @@ public partial class MainWindow : Window
         IStorageFolder? suggestedFolder = null;
         try
         {
-            string? dir = Path.GetDirectoryName(item.FilePath);
-            if (dir is not null)
-                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(Path.GetFullPath(dir)));
+            if (item.Source.DirectoryHint is { } dir)
+                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(dir));
         }
         catch
         {
@@ -168,9 +189,9 @@ public partial class MainWindow : Window
 
         IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Open .ndz / .nds / .dsi file(s)",
+            Title = "Open .ndz / .nds / .dsi file(s) or a .zip/.7z/.rar archive",
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType("NDZ / NDS / DSi") { Patterns = ["*.ndz", "*.nds", "*.dsi"] }],
+            FileTypeFilter = ExaminePickerFileTypes,
         });
 
         string[] paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray();
@@ -256,9 +277,8 @@ public partial class MainWindow : Window
         IStorageFolder? suggestedFolder = null;
         try
         {
-            string? dir = Path.GetDirectoryName(source.FilePath);
-            if (dir is not null)
-                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(Path.GetFullPath(dir)));
+            if (source.Source.DirectoryHint is { } dir)
+                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(dir));
         }
         catch
         {
@@ -303,5 +323,22 @@ public partial class MainWindow : Window
         }
 
         await entry.ComputeChecksumsAsync(externalBaseRom);
+    }
+
+    private void OnExitClicked(object? sender, RoutedEventArgs e)
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            desktop.Shutdown();
+    }
+
+    private void OnThemeLightClicked(object? sender, RoutedEventArgs e) => ThemeService.SetTheme(AppTheme.Light);
+    private void OnThemeDarkClicked(object? sender, RoutedEventArgs e) => ThemeService.SetTheme(AppTheme.Dark);
+    private void OnThemeSystemClicked(object? sender, RoutedEventArgs e) => ThemeService.SetTheme(AppTheme.System);
+    private void OnThemeSignatureClicked(object? sender, RoutedEventArgs e) => ThemeService.SetTheme(AppTheme.Signature);
+
+    private async void OnAboutClicked(object? sender, RoutedEventArgs e)
+    {
+        var about = new AboutWindow();
+        await about.ShowDialog(this);
     }
 }

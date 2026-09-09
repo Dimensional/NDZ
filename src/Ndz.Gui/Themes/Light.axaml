@@ -1,0 +1,37 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- A real light theme, not just an inverted dark one - success/warning/error use
+         darker, more saturated hues than the dark themes' pastel-on-black versions, since
+         a pastel that reads clearly on near-black is too washed out to read on
+         near-white. Accent blue stays the same brand color as the dark themes. -->
+
+    <SolidColorBrush x:Key="Surface.Window">#F7F8FA</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Header">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Card">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.CardHover">#F0F2F5</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Nested">#F3F4F6</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Hover">#EEF0F3</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Success">#E8F7EE</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Warning">#FCF2E3</SolidColorBrush>
+    <SolidColorBrush x:Key="Surface.Error">#FBEAEA</SolidColorBrush>
+
+    <SolidColorBrush x:Key="Border.Default">#DDE1E6</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Ghost">#C7CCD4</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Subtle">#C2C7D0</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Divider">#E4E7EB</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Success">#3FA968</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Warning">#C98A2E</SolidColorBrush>
+    <SolidColorBrush x:Key="Border.Error">#D14C56</SolidColorBrush>
+
+    <SolidColorBrush x:Key="Text.Primary">#1B1F27</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Secondary">#3C4250</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Muted">#6B7280</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Tertiary">#565C6B</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.OnAccent">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Success">#1F8A4C</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Warning">#A66A1E</SolidColorBrush>
+    <SolidColorBrush x:Key="Text.Error">#C43C46</SolidColorBrush>
+
+    <SolidColorBrush x:Key="Accent.Default">#5C8DF6</SolidColorBrush>
+    <SolidColorBrush x:Key="Accent.Hover">#4E7DE0</SolidColorBrush>
+</ResourceDictionary>

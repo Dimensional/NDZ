@@ -1,13 +1,12 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Ndz.Gui.App"
-             xmlns:local="using:Ndz.Gui"
-             RequestedThemeVariant="Dark">
-             <!-- Forced dark: every card/control in this app is hand-styled against a fixed
-                  dark palette (the "Signature" theme from the design mockups) - Light/System
-                  switching isn't implemented yet, so this at least keeps FluentTheme-templated
-                  controls we don't hand-style ourselves (ComboBox's popup, scrollbars) from
-                  clashing against it on a light-mode system. Revisit once real theming lands. -->
+             xmlns:local="using:Ndz.Gui">
+             <!-- RequestedThemeVariant is no longer set here - ThemeService.Initialize()
+                  (called from App.axaml.cs, before the main window is created) sets it at
+                  runtime based on the user's persisted Light/Dark/System/Signature choice,
+                  and also merges the matching Themes/*.axaml color-token dictionary into
+                  Application.Resources - see ThemeService's own remarks. -->
 
     <Application.DataTemplates>
         <local:ViewLocator/>
