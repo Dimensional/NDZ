@@ -5,6 +5,15 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Self-contained only (no separate .NET install needed to run a downloaded
+         release) - deliberately NOT PublishSingleFile/PublishTrimmed like Ndz.Cli's own
+         csproj. Trimming a reflection/XAML-heavy Avalonia UI safely needs real per-page
+         verification this project hasn't done yet (unlike Ndz.Core, which the CLI's own
+         aggressive trim settings already prove trims cleanly) - a build that compiles
+         but crashes at runtime on some trimmed-away type is a worse outcome than a
+         larger download. Revisit once there's a real reason to (and a way to verify it
+         across all published RIDs, not just the host this was built on). -->
+    <SelfContained>true</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>

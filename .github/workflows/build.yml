@@ -75,6 +75,48 @@ jobs:
           path: ndz-${{ matrix.rid }}.*
           if-no-files-found: error
 
+  # The GUI (NDZ Forge), self-contained per RID - no .NET install required. Deliberately
+  # NOT single-file/trimmed, unlike the CLI above: Ndz.Gui.csproj's own comment on
+  # <SelfContained> explains why trimming a reflection/XAML-heavy Avalonia UI isn't
+  # something this project has verified safe yet. Verified locally (win-x64: published,
+  # launched, confirmed running via a real process check, not just "it compiled") before
+  # this job was ever added - same cross-compile-from-one-host approach as publish-native.
+  publish-gui:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Publish self-contained ${{ matrix.rid }}
+        run: dotnet publish src/Ndz.Gui/Ndz.Gui.csproj -c Release -r ${{ matrix.rid }} -o out/gui-${{ matrix.rid }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd out/gui-${{ matrix.rid }}
+          case "${{ matrix.rid }}" in
+            win-*)
+              zip -r "../../ndzforge-${{ matrix.rid }}.zip" .
+              ;;
+            *)
+              chmod +x Ndz.Gui
+              tar czf "../../ndzforge-${{ matrix.rid }}.tar.gz" .
+              ;;
+          esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ndzforge-${{ matrix.rid }}
+          path: ndzforge-${{ matrix.rid }}.*
+          if-no-files-found: error
+
   # A framework-dependent build: just the app's own managed DLLs, no bundled runtime -
   # smaller download, but the target machine needs the matching .NET runtime installed
   # (`dotnet ndz.dll ...`, or `dotnet tool`-style invocation). Explicitly overrides the
@@ -107,7 +149,7 @@ jobs:
   # artifacts above, which is enough to sanity-check the workflow without cutting a release.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-native, publish-portable]
+    needs: [publish-native, publish-gui, publish-portable]
     runs-on: ubuntu-latest
     permissions:
       contents: write
