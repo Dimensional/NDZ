@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Ndz.Core.Archives;
 
 namespace Ndz.Gui.ViewModels;
 
@@ -28,8 +29,12 @@ public enum ExamineSourceKind
 /// </summary>
 public partial class ExamineSourceViewModel : ViewModelBase
 {
-    public string FilePath { get; }
+    /// <summary>Where this source's bytes came from - a real file, or one entry inside a .zip/.7z/.rar archive (see <see cref="RomSource"/>).</summary>
+    public RomSource Source { get; }
+
+    /// <summary>Compact display name - just the file name for a real file, or "entry.ndz (in archive.zip)" for an archive entry (see <see cref="RomSource.ShortLabel"/>).</summary>
     public string FileName { get; }
+
     public ExamineSourceKind Kind { get; }
 
     /// <summary>e.g. "pair container - 3 ROMs, 187.4 MiB" / "single .ndz" / "raw ROM".</summary>
@@ -64,10 +69,10 @@ public partial class ExamineSourceViewModel : ViewModelBase
     partial void OnUnpackAllResultTextChanged(string? value) => OnPropertyChanged(nameof(HasUnpackAllResult));
     partial void OnUnpackAllErrorChanged(string? value) => OnPropertyChanged(nameof(HasUnpackAllError));
 
-    public ExamineSourceViewModel(string filePath, ExamineSourceKind kind, string headerText, ObservableCollection<ExamineEntryViewModel> entries)
+    public ExamineSourceViewModel(RomSource source, ExamineSourceKind kind, string headerText, ObservableCollection<ExamineEntryViewModel> entries)
     {
-        FilePath = filePath;
-        FileName = Path.GetFileName(filePath);
+        Source = source;
+        FileName = source.ShortLabel;
         Kind = kind;
         HeaderText = headerText;
         Entries = entries;

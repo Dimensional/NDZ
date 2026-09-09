@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Ndz.Core.Archives;
 using Ndz.Core.Compression;
 using Ndz.Core.Format;
 using Ndz.Gui.Models;
@@ -26,20 +27,34 @@ namespace Ndz.Gui.ViewModels;
 public partial class RomEntryViewModel : ViewModelBase
 {
     /// <summary>
-    /// Leaves one logical core free for the UI thread and everything else on the
-    /// machine, rather than the Core analyzers'/writers' own default of unbounded
-    /// (every core - fine for the CLI, a real problem for a window that needs to keep
-    /// feeling alive while this runs in the background). Real-world motivation: a full
-    /// pack at level 19 legitimately can occupy every core by design (matches the
+    /// Leaves two logical cores free for the UI thread, the OS, and everything else
+    /// running on the machine, rather than the Core analyzers'/writers' own default of
+    /// unbounded (every core - fine for the CLI, a real problem for a window that needs
+    /// to keep feeling alive while this runs in the background). Real-world motivation: a
+    /// full pack at level 19 legitimately can occupy every core by design (matches the
     /// reference packer's own multi-threaded approach), which made an actual GUI session
     /// feel like it had hung even though the UI thread itself was never blocked - just
-    /// starved of scheduler time.
+    /// starved of scheduler time. **Widened from one reserved core to two (2026-09-08)**
+    /// after a real session on a multi-target pair pack (base + several targets, each
+    /// sourced from a separate .zip - see <see cref="RomSource"/>) still nearly hung the
+    /// whole machine at the one-core buffer - one spare core wasn't enough headroom in
+    /// practice, particularly on a lower-core-count machine where "every core but one" is
+    /// still nearly total saturation.
     /// </summary>
-    private static readonly int MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1);
+    private static readonly int MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 2);
+
+    /// <summary>
+    /// Bindable mirror of <see cref="PairContainerPolicy.CreationEnabled"/> - drives
+    /// whether a card's "+" target strip shows at all (see MainWindow.axaml). Flipping
+    /// the Core flag back on re-enables this automatically, nothing here to touch.
+    /// </summary>
+    public bool PairPackingEnabled => PairContainerPolicy.CreationEnabled;
 
     private readonly Action<RomEntryViewModel> _onRemove;
 
-    public string FilePath { get; }
+    /// <summary>Where this ROM's bytes actually come from - a real file, or one entry inside a .zip/.7z/.rar archive (see <see cref="RomSource"/>). Re-read from here whenever the real bytes are needed, never kept resident.</summary>
+    public RomSource Source { get; }
+
     public Bitmap Icon { get; }
     public string ShortTitle { get; }
     public string FullTitle { get; }
@@ -176,7 +191,7 @@ public partial class RomEntryViewModel : ViewModelBase
     partial void OnPackErrorChanged(string? value) => OnPropertyChanged(nameof(HasPackError));
 
     public RomEntryViewModel(
-        string filePath,
+        RomSource source,
         Bitmap icon,
         string shortTitle,
         string fullTitle,
@@ -189,7 +204,7 @@ public partial class RomEntryViewModel : ViewModelBase
         long fileSizeBytes,
         Action<RomEntryViewModel> onRemove)
     {
-        FilePath = filePath;
+        Source = source;
         Icon = icon;
         ShortTitle = shortTitle;
         FullTitle = fullTitle;
@@ -206,7 +221,7 @@ public partial class RomEntryViewModel : ViewModelBase
         BannerNote = bannerVersion >= 0x0103 ? "Animated icon (not rendered)" : string.Empty;
         DestinationText = destinationLabel;
         RegionLockText = string.IsNullOrEmpty(regionLockLabel) ? string.Empty : $"Region-locked: {regionLockLabel}";
-        SourceFileText = $"{Path.GetFileName(filePath)} · {fileSizeBytes / (1024.0 * 1024.0):0.#} MB";
+        SourceFileText = $"{source.ShortLabel} · {fileSizeBytes / (1024.0 * 1024.0):0.#} MB";
         _onRemove = onRemove;
 
         var tooltipLines = new List<string>();
@@ -217,7 +232,7 @@ public partial class RomEntryViewModel : ViewModelBase
             tooltipLines.Add(RegionLockText);
         if (HasBannerNote)
             tooltipLines.Add(BannerNote);
-        tooltipLines.Add(filePath);
+        tooltipLines.Add(source.FullLabel);
         TooltipText = string.Join("\n\n", tooltipLines);
     }
 
@@ -225,10 +240,12 @@ public partial class RomEntryViewModel : ViewModelBase
     private void Remove() => _onRemove(this);
 
     /// <summary>
-    /// Runs the real Core analyzer against this card's actual ROM bytes - re-read from
-    /// disk here rather than kept resident since load time (a queue of dozens of ROMs
-    /// staying fully loaded in memory just in case someone clicks Analyze would be a real
-    /// cost for an occasional action). Uses <see cref="BlockSizeAnalyzer.AnalyzePair"/>
+    /// Runs the real Core analyzer against this card's actual ROM bytes - re-read via
+    /// <see cref="Source"/> here rather than kept resident since load time (a queue of
+    /// dozens of ROMs staying fully loaded in memory just in case someone clicks Analyze
+    /// would be a real cost for an occasional action; for an archive-sourced ROM this
+    /// re-decompresses that entry from the archive again rather than ever having written
+    /// it to disk - see <see cref="RomSource"/>). Uses <see cref="BlockSizeAnalyzer.AnalyzePair"/>
     /// when this card has targets (scored on base+targets combined - see that method's own
     /// remarks on why analyzing the base alone would pick a block size that badly hurts
     /// base-patched targets), or the plain single-ROM <see cref="BlockSizeAnalyzer.Analyze"/>
@@ -244,7 +261,7 @@ public partial class RomEntryViewModel : ViewModelBase
         {
             if (Targets.Count == 0)
             {
-                byte[] rom = await Task.Run(() => File.ReadAllBytes(FilePath));
+                byte[] rom = await Task.Run(() => Source.ReadBytes());
                 BlockSizeAnalyzer.Result result = await Task.Run(() => BlockSizeAnalyzer.Analyze(rom, maxDegreeOfParallelism: MaxDegreeOfParallelism));
 
                 var recommended = result.Candidates.First(c => c.BlockSize == result.RecommendedBlockSize);
@@ -257,9 +274,8 @@ public partial class RomEntryViewModel : ViewModelBase
             }
             else
             {
-                byte[] baseRom = await Task.Run(() => File.ReadAllBytes(FilePath));
-                string[] targetPaths = Targets.Select(t => t.FilePath).ToArray();
-                byte[][] targetRoms = await Task.Run(() => targetPaths.Select(File.ReadAllBytes).ToArray());
+                byte[] baseRom = await Task.Run(() => Source.ReadBytes());
+                byte[][] targetRoms = await Task.Run(() => Targets.Select(t => t.Source.ReadBytes()).ToArray());
 
                 BlockSizeAnalyzer.PairResult result = await Task.Run(() => BlockSizeAnalyzer.AnalyzePair(baseRom, targetRoms, maxDegreeOfParallelism: MaxDegreeOfParallelism));
 
@@ -342,7 +358,7 @@ public partial class RomEntryViewModel : ViewModelBase
 
     private long PackAndVerify(string outputPath)
     {
-        byte[] baseRom = File.ReadAllBytes(FilePath);
+        byte[] baseRom = Source.ReadBytes();
         int? blockSizeOverride = SelectedBlockSize.Bytes;
         int? dictSizeOverride = SelectedDictionarySize.Bytes;
 
@@ -362,7 +378,7 @@ public partial class RomEntryViewModel : ViewModelBase
         }
         else
         {
-            byte[][] targetRoms = Targets.Select(t => File.ReadAllBytes(t.FilePath)).ToArray();
+            byte[][] targetRoms = Targets.Select(t => t.Source.ReadBytes()).ToArray();
             int blockSize = blockSizeOverride ?? BlockSizeAnalyzer.AnalyzePair(baseRom, targetRoms, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedBlockSize;
 
             int baseDictSize = dictSizeOverride ?? DictionaryAnalyzer.Analyze(baseRom, null, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedDictionarySize;
