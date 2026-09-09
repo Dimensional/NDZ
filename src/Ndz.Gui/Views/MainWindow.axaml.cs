@@ -241,4 +241,67 @@ public partial class MainWindow : Window
         if (outputPath is not null)
             await entry.UnpackAsync(outputPath, externalBaseRom);
     }
+
+    /// <summary>
+    /// Unpacks every entry of one Examine source into a single chosen folder - see
+    /// <see cref="ExamineSourceViewModel.UnpackAllAsync"/> for the real work (naming,
+    /// per-entry results). Suggests that source's own containing folder as the starting
+    /// location, matching <see cref="OnPackClicked"/>'s own pattern.
+    /// </summary>
+    private async void OnUnpackAllClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ExamineSourceViewModel source })
+            return;
+
+        IStorageFolder? suggestedFolder = null;
+        try
+        {
+            string? dir = Path.GetDirectoryName(source.FilePath);
+            if (dir is not null)
+                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(Path.GetFullPath(dir)));
+        }
+        catch
+        {
+            // Best-effort only - the picker just opens wherever the OS defaults to instead.
+        }
+
+        IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = $"Unpack all ROMs from \"{source.FileName}\" into…",
+            AllowMultiple = false,
+            SuggestedStartLocation = suggestedFolder,
+        });
+
+        string? outputFolder = folders.FirstOrDefault()?.TryGetLocalPath();
+        if (outputFolder is not null)
+            await source.UnpackAllAsync(outputFolder);
+    }
+
+    /// <summary>
+    /// Computes one Examine entry's CRC32/MD5/SHA-1/SHA-256 - same base-ROM-prompt
+    /// contract as <see cref="OnUnpackClicked"/>, just without a save dialog afterward.
+    /// </summary>
+    private async void OnChecksumsClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ExamineEntryViewModel entry })
+            return;
+
+        byte[]? externalBaseRom = null;
+        if (entry.RequiresExternalBaseRom)
+        {
+            IReadOnlyList<IStorageFile> baseFiles = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = $"Select base ROM for \"{entry.ShortTitle}\"",
+                AllowMultiple = false,
+                FileTypeFilter = [new FilePickerFileType("Nintendo DS/DSi ROM") { Patterns = ["*.nds", "*.dsi"] }],
+            });
+
+            string? basePath = baseFiles.FirstOrDefault()?.TryGetLocalPath();
+            if (basePath is null)
+                return;
+            externalBaseRom = await File.ReadAllBytesAsync(basePath);
+        }
+
+        await entry.ComputeChecksumsAsync(externalBaseRom);
+    }
 }

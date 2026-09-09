@@ -105,6 +105,20 @@
             <Setter Property="Foreground" Value="#E8EAEE"/>
             <Setter Property="BorderBrush" Value="#5C8DF6"/>
         </Style>
+        <Style Selector="TextBlock.checkresult">
+            <Setter Property="Foreground" Value="#E5636B"/>
+        </Style>
+        <Style Selector="TextBlock.checkresult.match">
+            <Setter Property="Foreground" Value="#4FBE83"/>
+        </Style>
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="#14161A"/>
+            <Setter Property="BorderBrush" Value="#2C303A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Foreground" Value="#E8EAEE"/>
+            <Setter Property="CaretBrush" Value="#E8EAEE"/>
+        </Style>
     </Window.Styles>
 
     <Grid RowDefinitions="52,*">
@@ -146,9 +160,13 @@
                     <TextBlock Text="folders are searched recursively — drop more anytime" Foreground="#6B7280" FontSize="11.5" HorizontalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Queue grid -->
-                <ScrollViewer IsVisible="{Binding HasItems}" Padding="20">
-                    <ItemsControl ItemsSource="{Binding QueueItems}">
+                <!-- Queue grid. Padding lives on the ItemsControl, not the ScrollViewer - Avalonia
+                     12.0.3's ScrollViewer.Padding was empirically confirmed (via a headless layout
+                     repro) to make its own Extent lag the content's true DesiredSize by one full
+                     change-cycle, capping how far the list could actually scroll. Padding here
+                     achieves the same visual inset without touching that property. -->
+                <ScrollViewer IsVisible="{Binding HasItems}">
+                    <ItemsControl Padding="20" ItemsSource="{Binding QueueItems}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <WrapPanel Orientation="Horizontal"/>
@@ -301,9 +319,9 @@
                     <TextBlock Text="pair containers show every bundled ROM · folders are searched recursively" Foreground="#6B7280" FontSize="11.5" HorizontalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Source list -->
-                <ScrollViewer IsVisible="{Binding HasItems}" Padding="20">
-                    <ItemsControl ItemsSource="{Binding Sources}">
+                <!-- Source list - see the Pack tab's own queue ScrollViewer above for the Padding remarks. -->
+                <ScrollViewer IsVisible="{Binding HasItems}">
+                    <ItemsControl Padding="20" ItemsSource="{Binding Sources}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Orientation="Vertical" Spacing="12"/>
@@ -314,13 +332,21 @@
                                 <Border Background="#1C1F26" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="10" Padding="14">
                                     <StackPanel Spacing="10">
 
-                                        <Grid ColumnDefinitions="*,Auto">
+                                        <Grid ColumnDefinitions="*,Auto,Auto">
                                             <StackPanel Grid.Column="0" Spacing="2">
                                                 <TextBlock Text="{Binding FileName}" Foreground="#E8EAEE" FontSize="13" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
                                                 <TextBlock Text="{Binding HeaderText}" Foreground="#6B7280" FontSize="10.5"/>
                                             </StackPanel>
-                                            <Button Grid.Column="1" Classes="iconbtn" Click="OnRemoveSourceClicked" VerticalAlignment="Top" Content="✕" FontSize="10"/>
+                                            <Button Grid.Column="1" Classes="ghost" Content="{Binding UnpackAllButtonText}" Click="OnUnpackAllClicked" IsVisible="{Binding ShowUnpackAll}" IsEnabled="{Binding !IsUnpackingAll}" VerticalAlignment="Center" FontSize="11" Padding="10,5" Margin="8,0"/>
+                                            <Button Grid.Column="2" Classes="iconbtn" Click="OnRemoveSourceClicked" VerticalAlignment="Top" Content="✕" FontSize="10"/>
                                         </Grid>
+
+                                        <Border IsVisible="{Binding HasUnpackAllResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding UnpackAllResultText}" Foreground="#4FBE83" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
+                                        <Border IsVisible="{Binding HasUnpackAllError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                            <TextBlock Text="{Binding UnpackAllError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
+                                        </Border>
 
                                         <Border Height="1" Background="#262A33"/>
 
@@ -346,7 +372,10 @@
                                                                     </StackPanel>
                                                                     <TextBlock Text="{Binding SummaryText}" Foreground="#8A90A0" FontSize="10.5" TextWrapping="Wrap"/>
                                                                 </StackPanel>
-                                                                <Button Grid.Column="2" Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding !IsUnpacking}" VerticalAlignment="Center" FontSize="11" Padding="10,5"/>
+                                                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                                    <Button Classes="ghost" Content="{Binding ChecksumsButtonText}" Click="OnChecksumsClicked" IsEnabled="{Binding !IsComputingChecksums}" FontSize="11" Padding="10,5"/>
+                                                                    <Button Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding !IsUnpacking}" FontSize="11" Padding="10,5"/>
+                                                                </StackPanel>
                                                             </Grid>
 
                                                             <Border IsVisible="{Binding HasUnpackResult}" Background="#14261C" BorderBrush="#2F6B47" BorderThickness="1" CornerRadius="7" Padding="7,5">
@@ -354,6 +383,30 @@
                                                             </Border>
                                                             <Border IsVisible="{Binding HasUnpackError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="7,5">
                                                                 <TextBlock Text="{Binding UnpackError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
+                                                            </Border>
+
+                                                            <!-- Computed checksums - four hex strings plus a live "paste one, see if it matches" box (RomChecksum.Matches auto-detects which of the four by length). -->
+                                                            <Border IsVisible="{Binding HasChecksums}" Background="#14161A" BorderBrush="#2C303A" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                                <StackPanel Spacing="5">
+                                                                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="2" ColumnSpacing="8">
+                                                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="CRC32" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Crc32Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="MD5" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Md5Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="SHA-1" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Sha1Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="SHA-256" Foreground="#6B7280" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Sha256Text}" Foreground="#C7CCD4" FontFamily="Consolas,Menlo,monospace" FontSize="10.5"/>
+                                                                    </Grid>
+
+                                                                    <Border Height="1" Background="#262A33" Margin="0,2"/>
+
+                                                                    <TextBox Text="{Binding ExpectedChecksumInput}" PlaceholderText="Paste a checksum to verify (CRC32/MD5/SHA-1/SHA-256)" FontFamily="Consolas,Menlo,monospace" FontSize="10.5" Padding="6,4"/>
+                                                                    <TextBlock Text="{Binding MatchResultText}" IsVisible="{Binding HasMatchResult}" Classes="checkresult" Classes.match="{Binding MatchSucceeded}" FontSize="10.5" FontWeight="Bold"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                            <Border IsVisible="{Binding HasChecksumError}" Background="#2B1414" BorderBrush="#E5636B" BorderThickness="1" CornerRadius="7" Padding="7,5">
+                                                                <TextBlock Text="{Binding ChecksumError}" Foreground="#E5636B" FontSize="10.5" TextWrapping="Wrap"/>
                                                             </Border>
                                                         </StackPanel>
                                                     </Border>

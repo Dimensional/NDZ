@@ -114,8 +114,8 @@ public partial class ExamineViewModel : ViewModelBase
     }
 
     private sealed record DecodedEntry(byte[] Rgba, string ShortTitle, string FullTitle, string GameCode,
-        string SummaryText, string TooltipText, bool RequiresExternalBaseRom, string SuggestedFileName,
-        Func<byte[]?, byte[]>? Decompress);
+        string SummaryText, string TooltipText, bool CanUnpack, bool RequiresExternalBaseRom, string SuggestedFileName,
+        Func<byte[]?, byte[]> GetRomBytes);
 
     private sealed record DecodedSource(string Path, ExamineSourceKind Kind, string HeaderText, List<DecodedEntry> Entries);
 
@@ -168,7 +168,7 @@ public partial class ExamineViewModel : ViewModelBase
                 frontMatter, entry.OriginalSize, entry.Size,
                 requiresExternalBaseRom: false,
                 baseLabel: isBase ? null : baseTitle,
-                decompress: _ => pair.DecompressEntry(index)));
+                getRomBytes: _ => pair.DecompressEntry(index)));
             totalOriginal += entry.OriginalSize;
         }
 
@@ -186,7 +186,7 @@ public partial class ExamineViewModel : ViewModelBase
             frontMatter, frontMatter.OriginalSize, (uint)bytes.LongLength,
             requiresExternalBaseRom: needsBase,
             baseLabel: baseLabel,
-            decompress: externalBase =>
+            getRomBytes: externalBase =>
             {
                 if (needsBase && externalBase is null)
                     throw new InvalidOperationException("This .ndz needs its base ROM to unpack - pick it first.");
@@ -199,7 +199,7 @@ public partial class ExamineViewModel : ViewModelBase
     }
 
     private static DecodedEntry BuildDecodedEntry(NdzFrontMatter frontMatter, uint originalSize, uint storedSize,
-        bool requiresExternalBaseRom, string? baseLabel, Func<byte[]?, byte[]> decompress)
+        bool requiresExternalBaseRom, string? baseLabel, Func<byte[]?, byte[]> getRomBytes)
     {
         byte[] rgba = NdsIcon.DecodeBitmap(frontMatter.Banner);
         string shortTitle = NdsIcon.DecodeShortTitle(frontMatter.Banner);
@@ -227,7 +227,7 @@ public partial class ExamineViewModel : ViewModelBase
 
         string suggestedFileName = SanitizeFileName(shortTitle) + ".nds";
 
-        return new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, requiresExternalBaseRom, suggestedFileName, decompress);
+        return new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: true, requiresExternalBaseRom, suggestedFileName, getRomBytes);
     }
 
     private static DecodedSource DecodeRawRom(string path, byte[] rom)
@@ -256,7 +256,10 @@ public partial class ExamineViewModel : ViewModelBase
         tooltipLines.Add(path);
         string tooltip = string.Join("\n\n", tooltipLines);
 
-        var entry = new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, RequiresExternalBaseRom: false, SuggestedFileName: string.Empty, Decompress: null);
+        // A raw ROM's "decompress" is trivial - the bytes already read from disk, verbatim -
+        // but it still goes through the same getRomBytes shape so checksumming works
+        // uniformly with a packed entry (see ExamineEntryViewModel's own remarks).
+        var entry = new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: false, RequiresExternalBaseRom: false, SuggestedFileName: string.Empty, GetRomBytes: _ => rom);
         return new DecodedSource(path, ExamineSourceKind.RawRom, "Raw ROM · already unpacked", [entry]);
     }
 
@@ -269,10 +272,10 @@ public partial class ExamineViewModel : ViewModelBase
     private static ExamineEntryViewModel ToViewModel(DecodedEntry decoded)
     {
         Bitmap icon = ToBitmap(decoded.Rgba);
-        return decoded.Decompress is null
-            ? ExamineEntryViewModel.ForRawRom(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText)
-            : ExamineEntryViewModel.ForPackedEntry(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText,
-                decoded.RequiresExternalBaseRom, decoded.SuggestedFileName, decoded.Decompress);
+        return decoded.CanUnpack
+            ? ExamineEntryViewModel.ForPackedEntry(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText,
+                decoded.RequiresExternalBaseRom, decoded.SuggestedFileName, decoded.GetRomBytes)
+            : ExamineEntryViewModel.ForRawRom(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText, decoded.GetRomBytes);
     }
 
     private void SetError(string? message)
