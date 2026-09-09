@@ -445,6 +445,18 @@ direction. Do not treat "not intended" as "confirmed broken," and do not treat "
 confirmed broken" as "confirmed safe." Ask the user before changing this behavior, and
 before treating either open question as settled.
 
+**Pair-container creation temporarily disabled in both user-facing tools, 2026-09-09.**
+At the user's own request, following the same conversation above: since the multi-ROM
+dictionary design isn't confirmed, the CLI's `--pair-out` and the GUI's target-grouping
+UI both now refuse to create a new pair container at all, gated by
+`Ndz.Core.Compression.PairContainerPolicy.CreationEnabled` (currently `false`). This is a
+policy flag checked only at those two entry points - `NdzPairWriter`/`NdzPairContainer`
+themselves are completely untouched, still fully implemented and fully test-covered, and
+reading/unpacking an *existing* pair container is not gated at all (Examine's own view,
+`ndz info`/`unpack`/`verify`) - only *creating* a new one is blocked. Flip
+`CreationEnabled` back to `true` once the format author confirms the real intended
+design; nothing else needs to change.
+
 ### Pair container format — implemented 2026-08-31, generalized to N ROMs 2026-09-06
 
 An outer container format wrapping two or more complete `.ndz` blobs side by side, used

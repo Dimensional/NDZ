@@ -107,6 +107,11 @@ static void PrintUsage()
                                                              before reporting success) - matches
                                                              ndztool.py's own --no-verify exactly.
           ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>
+                                                             TEMPORARILY DISABLED (PairContainerPolicy.CreationEnabled
+                                                             is false) - the format author hasn't confirmed the
+                                                             real multi-ROM dictionary design yet. Kept documented
+                                                             here since the code and this help text return the
+                                                             moment that flag flips back on.
                                                              Pack a base plus one or more base-patched targets
                                                              into one self-contained file - no external base
                                                              needed to unpack any of them. A star topology:
@@ -571,6 +576,11 @@ static int RunCompress(string[] args)
         Console.Error.WriteLine("--pair-out needs --base (the pair holds base + patched).");
         return 1;
     }
+    if (pairOutPath != null && !PairContainerPolicy.CreationEnabled)
+    {
+        Console.Error.WriteLine($"error: {PairContainerPolicy.DisabledMessage}");
+        return 1;
+    }
 
     // Resolve the collected --raw-dict value(s). Three shapes:
     //  - none given: no dictionary anywhere (rawDictionarySize stays 0).
@@ -893,7 +903,13 @@ static int RunInfo(string[] args)
             var flags = new[] { NdzFlags.V2, NdzFlags.ZStd, NdzFlags.Filters, NdzFlags.BasePatch, NdzFlags.RawDictionary }
                 .Where(f => fm.Flags.HasFlag(f));
             string gameCodeText = System.Text.Encoding.ASCII.GetString(BitConverter.GetBytes(entry.GameCode));
-            Console.WriteLine($"  [{i}] {gameCodeText}  {entry.Size:N0} -> {entry.OriginalSize:N0} bytes  [{string.Join(", ", flags)}]" +
+            // Dictionary size is a per-entry property, not shown by the flag name alone
+            // (RawDictionary just says "has one") - each entry in a pair container can
+            // carry a different size (see docs/ndz-format-spec.md's "Mena ANSWERED"
+            // remarks - independent per-entry dictionaries were confirmed NOT to be the
+            // format author's own intended design, and are unconfirmed on real hardware).
+            string dictText = fm.HasDictionary ? $", dict {fm.DictionaryDecompressedSize:N0}B" : "";
+            Console.WriteLine($"  [{i}] {gameCodeText}  {entry.Size:N0} -> {entry.OriginalSize:N0} bytes  [{string.Join(", ", flags)}]{dictText}" +
                 (i == pair.PlainEntryIndex ? "  (self-contained)" : ""));
         }
         return 0;

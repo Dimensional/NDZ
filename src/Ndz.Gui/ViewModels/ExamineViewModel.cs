@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Ndz.Core.Archives;
 using Ndz.Core.Compression;
 using Ndz.Core.Format;
 using Ndz.Gui.Models;
@@ -18,11 +19,14 @@ namespace Ndz.Gui.ViewModels;
 
 /// <summary>
 /// The Examine queue: drop or open any number of .ndz files (single blobs, or pair/N-way
-/// containers - <see cref="NdzPairContainer"/>) as well as raw .nds/.dsi ROMs, and see them
-/// grouped by source file with per-entry icon/title/id, size/ratio, and flags. Each packed
-/// entry can be unpacked back to a real .nds independently - a pair-container entry
-/// resolves its own base internally, a standalone base-patched blob (something only the
-/// CLI, not this GUI's own Pack view, can produce) prompts for its base ROM first.
+/// containers - <see cref="NdzPairContainer"/>), raw .nds/.dsi ROMs, or a .zip/.7z/.rar
+/// archive holding any of those (each entry read straight from the archive's own
+/// decompression stream via <see cref="RomSource"/>/<see cref="ArchiveExtractor"/> - no
+/// extraction to disk - see <see cref="Classify"/>), and see them grouped by source file
+/// with per-entry icon/title/id, size/ratio, and flags. Each packed entry can be unpacked
+/// back to a real .nds independently - a pair-container entry resolves its own base
+/// internally, a standalone base-patched blob (something only the CLI, not this GUI's own
+/// Pack view, can produce) prompts for its base ROM first.
 /// </summary>
 public partial class ExamineViewModel : ViewModelBase
 {
@@ -55,12 +59,12 @@ public partial class ExamineViewModel : ViewModelBase
     {
         SetError(null);
 
-        List<string> files = await Task.Run(() => ExpandPaths(paths));
+        List<RomSource> files = await Task.Run(() => ExpandPaths(paths));
 
         string? lastError = null;
-        foreach (string path in files)
+        foreach (RomSource source in files)
         {
-            (DecodedSource? decoded, string? error) = await Task.Run(() => TryDecodeSource(path));
+            (DecodedSource? decoded, string? error) = await Task.Run(() => TryDecodeSource(source));
             if (decoded is not null)
                 Sources.Add(ToViewModel(decoded));
             else
@@ -75,9 +79,9 @@ public partial class ExamineViewModel : ViewModelBase
 
     public void RemoveSource(ExamineSourceViewModel source) => Sources.Remove(source);
 
-    private static List<string> ExpandPaths(IEnumerable<string> paths)
+    private static List<RomSource> ExpandPaths(IEnumerable<string> paths)
     {
-        var files = new List<string>();
+        var files = new List<RomSource>();
         var visitedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string path in paths)
@@ -99,56 +103,80 @@ public partial class ExamineViewModel : ViewModelBase
                 }
 
                 foreach (string file in found)
-                {
-                    if (AcceptedExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
-                        files.Add(file);
-                }
+                    Classify(file, files);
             }
-            else if (File.Exists(path) && AcceptedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            else if (File.Exists(path))
             {
-                files.Add(path);
+                Classify(path, files);
             }
         }
 
         return files;
     }
 
+    private static void Classify(string file, List<RomSource> files)
+    {
+        string ext = Path.GetExtension(file);
+        if (AcceptedExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase))
+        {
+            files.Add(RomSource.ForFile(file));
+        }
+        else if (ArchiveExtractor.IsSupportedArchive(file))
+        {
+            // Same idea as the Pack queue's own Classify - a real ROM collection often
+            // has each game as its own separate archive file, so list straight out
+            // whatever .ndz/.nds/.dsi it holds (cheap - no decompression yet) and add a
+            // RomSource pointer per match, which only actually reads that one entry once
+            // something needs its bytes. No extraction to disk at any point.
+            try
+            {
+                foreach (string key in ArchiveExtractor.ListMatchingEntryKeys(file, AcceptedExtensions))
+                    files.Add(RomSource.ForArchiveEntry(file, key));
+            }
+            catch (Exception)
+            {
+                // Corrupt, encrypted, or otherwise unreadable archive - contributes
+                // nothing, same as an unreadable folder above.
+            }
+        }
+    }
+
     private sealed record DecodedEntry(byte[] Rgba, string ShortTitle, string FullTitle, string GameCode,
         string SummaryText, string TooltipText, bool CanUnpack, bool RequiresExternalBaseRom, string SuggestedFileName,
         Func<byte[]?, byte[]> GetRomBytes);
 
-    private sealed record DecodedSource(string Path, ExamineSourceKind Kind, string HeaderText, List<DecodedEntry> Entries);
+    private sealed record DecodedSource(RomSource Source, ExamineSourceKind Kind, string HeaderText, List<DecodedEntry> Entries);
 
-    private static (DecodedSource? Decoded, string? Error) TryDecodeSource(string path)
+    private static (DecodedSource? Decoded, string? Error) TryDecodeSource(RomSource source)
     {
         byte[] bytes;
         try
         {
-            bytes = File.ReadAllBytes(path);
+            bytes = source.ReadBytes();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return (null, $"Couldn't read \"{Path.GetFileName(path)}\": {ex.Message}");
+            return (null, $"Couldn't read \"{source.ShortLabel}\": {ex.Message}");
         }
 
         try
         {
-            bool isNdz = Path.GetExtension(path).Equals(".ndz", StringComparison.OrdinalIgnoreCase);
-            DecodedSource decoded = isNdz ? DecodeNdz(path, bytes) : DecodeRawRom(path, bytes);
+            bool isNdz = source.Extension.Equals(".ndz", StringComparison.OrdinalIgnoreCase);
+            DecodedSource decoded = isNdz ? DecodeNdz(source, bytes) : DecodeRawRom(source, bytes);
             return (decoded, null);
         }
         catch (Exception ex)
         {
-            return (null, $"\"{Path.GetFileName(path)}\" couldn't be examined: {ex.Message}");
+            return (null, $"\"{source.ShortLabel}\" couldn't be examined: {ex.Message}");
         }
     }
 
-    private static DecodedSource DecodeNdz(string path, byte[] bytes) =>
+    private static DecodedSource DecodeNdz(RomSource source, byte[] bytes) =>
         NdzPairContainer.TryRead(bytes, out NdzPairContainer? pair)
-            ? DecodePairContainer(path, pair!)
-            : DecodeSingleNdz(path, bytes);
+            ? DecodePairContainer(source, pair!)
+            : DecodeSingleNdz(source, bytes);
 
-    private static DecodedSource DecodePairContainer(string path, NdzPairContainer pair)
+    private static DecodedSource DecodePairContainer(RomSource source, NdzPairContainer pair)
     {
         // Decode the self-contained entry's title first - every base-patched entry's own
         // summary references it by name instead of a raw hex game code.
@@ -173,10 +201,10 @@ public partial class ExamineViewModel : ViewModelBase
         }
 
         string header = $"Pair container · {pair.Entries.Count} ROMs, {SizeOption.FromBytes((int)Math.Min(totalOriginal, int.MaxValue)).Label} total";
-        return new DecodedSource(path, ExamineSourceKind.NdzPair, header, entries);
+        return new DecodedSource(source, ExamineSourceKind.NdzPair, header, entries);
     }
 
-    private static DecodedSource DecodeSingleNdz(string path, byte[] bytes)
+    private static DecodedSource DecodeSingleNdz(RomSource source, byte[] bytes)
     {
         (NdzFrontMatter frontMatter, _) = NdzArchive.ReadInfo(bytes);
         bool needsBase = frontMatter.Flags.HasFlag(NdzFlags.BasePatch);
@@ -195,7 +223,7 @@ public partial class ExamineViewModel : ViewModelBase
             });
 
         string header = needsBase ? "Single .ndz · base-patched, needs its base ROM to unpack" : "Single .ndz";
-        return new DecodedSource(path, ExamineSourceKind.NdzSingle, header, [entry]);
+        return new DecodedSource(source, ExamineSourceKind.NdzSingle, header, [entry]);
     }
 
     private static DecodedEntry BuildDecodedEntry(NdzFrontMatter frontMatter, uint originalSize, uint storedSize,
@@ -209,7 +237,13 @@ public partial class ExamineViewModel : ViewModelBase
         double ratio = storedSize == 0 ? 0 : (double)originalSize / storedSize;
         var flags = new List<string>();
         if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch)) flags.Add("base-patched");
-        if (frontMatter.HasDictionary) flags.Add("dictionary");
+        // Dictionary size is a per-entry property, not just a yes/no flag - each entry in
+        // a pair container can carry a different size (see docs/ndz-format-spec.md's
+        // "Mena ANSWERED" remarks - independent per-entry dictionaries were confirmed NOT
+        // to be the format author's own intended design, and are unconfirmed on real
+        // hardware - showing the real size here is what makes that visible at a glance).
+        if (frontMatter.HasDictionary)
+            flags.Add($"dictionary ({SizeOption.FromBytes((int)Math.Min(frontMatter.DictionaryDecompressedSize, int.MaxValue)).Label})");
         if (frontMatter.Flags.HasFlag(NdzFlags.Filters)) flags.Add("filters");
         string blockSizeLabel = SizeOption.FromBytes(frontMatter.Flags.GetBlockSize()).Label;
 
@@ -230,7 +264,7 @@ public partial class ExamineViewModel : ViewModelBase
         return new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: true, requiresExternalBaseRom, suggestedFileName, getRomBytes);
     }
 
-    private static DecodedSource DecodeRawRom(string path, byte[] rom)
+    private static DecodedSource DecodeRawRom(RomSource source, byte[] rom)
     {
         NdsRomInfo info = NdsRomInfo.FromRom(rom);
         byte[] rgba = NdsIcon.DecodeBitmap(info.Banner);
@@ -253,20 +287,21 @@ public partial class ExamineViewModel : ViewModelBase
         if (!string.IsNullOrEmpty(fullTitle))
             tooltipLines.Add(fullTitle);
         tooltipLines.Add($"{gameCode} · {summary}");
-        tooltipLines.Add(path);
+        tooltipLines.Add(source.FullLabel);
         string tooltip = string.Join("\n\n", tooltipLines);
 
-        // A raw ROM's "decompress" is trivial - the bytes already read from disk, verbatim -
-        // but it still goes through the same getRomBytes shape so checksumming works
-        // uniformly with a packed entry (see ExamineEntryViewModel's own remarks).
+        // A raw ROM's "decompress" is trivial - the bytes already read once above,
+        // verbatim - but it still goes through the same getRomBytes shape so
+        // checksumming works uniformly with a packed entry (see ExamineEntryViewModel's
+        // own remarks).
         var entry = new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: false, RequiresExternalBaseRom: false, SuggestedFileName: string.Empty, GetRomBytes: _ => rom);
-        return new DecodedSource(path, ExamineSourceKind.RawRom, "Raw ROM · already unpacked", [entry]);
+        return new DecodedSource(source, ExamineSourceKind.RawRom, "Raw ROM · already unpacked", [entry]);
     }
 
     private static ExamineSourceViewModel ToViewModel(DecodedSource decoded)
     {
         var entries = new ObservableCollection<ExamineEntryViewModel>(decoded.Entries.Select(ToViewModel));
-        return new ExamineSourceViewModel(decoded.Path, decoded.Kind, decoded.HeaderText, entries);
+        return new ExamineSourceViewModel(decoded.Source, decoded.Kind, decoded.HeaderText, entries);
     }
 
     private static ExamineEntryViewModel ToViewModel(DecodedEntry decoded)

@@ -11,15 +11,20 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Ndz.Core.Archives;
+using Ndz.Core.Compression;
 using Ndz.Core.Format;
 
 namespace Ndz.Gui.ViewModels;
 
 /// <summary>
-/// The Pack queue: drop or open any number of real .nds/.dsi ROMs - individually, or whole
-/// directory trees - and see them appear as decoded cards (icon/title/id). Dropping a fresh
-/// file directly onto an existing card's "+" strip (<see cref="AddTargetsAsync"/>) adds it
-/// as that card's patch target instead of a new top-level card.
+/// The Pack queue: drop or open any number of real .nds/.dsi ROMs - individually, whole
+/// directory trees, or inside a .zip/.7z/.rar archive (each entry read straight from the
+/// archive's own decompression stream via <see cref="RomSource"/>/<see cref="ArchiveExtractor"/>
+/// - no extraction to disk - see <see cref="Classify"/>) - and see them appear as decoded
+/// cards (icon/title/id). Dropping a fresh file directly onto an existing card's "+" strip
+/// (<see cref="AddTargetsAsync"/>) adds it as that card's patch target instead of a new
+/// top-level card.
 /// </summary>
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -81,6 +86,15 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     public async Task AddTargetsAsync(RomEntryViewModel baseItem, IEnumerable<string> paths)
     {
+        // Defense in depth: the UI itself hides the "+" strip that's the only normal way
+        // to reach this (see RomEntryViewModel.PairPackingEnabled), but this is the real
+        // gate - nothing reaches NdzPairWriter through this class while it's off.
+        if (!PairContainerPolicy.CreationEnabled)
+        {
+            SetError(PairContainerPolicy.DisabledMessage);
+            return;
+        }
+
         List<DecodedRom> decoded = await DecodeAllAsync(paths);
         foreach (DecodedRom rom in decoded)
             baseItem.Targets.Add(ToViewModel(rom, target => RemoveTarget(baseItem, target)));
@@ -103,13 +117,13 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         SetError(null);
 
-        (List<string> romFiles, int skippedNdzCount) = await Task.Run(() => ExpandPaths(paths));
+        (List<RomSource> romFiles, int skippedNdzCount) = await Task.Run(() => ExpandPaths(paths));
 
         var decoded = new List<DecodedRom>();
         string? lastError = null;
-        foreach (string path in romFiles)
+        foreach (RomSource source in romFiles)
         {
-            (DecodedRom? rom, string? error) = await Task.Run(() => TryDecode(path));
+            (DecodedRom? rom, string? error) = await Task.Run(() => TryDecode(source));
             if (rom is not null)
                 decoded.Add(rom);
             else
@@ -126,9 +140,9 @@ public partial class MainWindowViewModel : ViewModelBase
         return decoded;
     }
 
-    private static (List<string> RomFiles, int SkippedNdzCount) ExpandPaths(IEnumerable<string> paths)
+    private static (List<RomSource> RomFiles, int SkippedNdzCount) ExpandPaths(IEnumerable<string> paths)
     {
-        var romFiles = new List<string>();
+        var romFiles = new List<RomSource>();
         var visitedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int skippedNdz = 0;
 
@@ -164,27 +178,54 @@ public partial class MainWindowViewModel : ViewModelBase
         return (romFiles, skippedNdz);
     }
 
-    private static void Classify(string file, List<string> romFiles, ref int skippedNdz)
+    private static void Classify(string file, List<RomSource> romFiles, ref int skippedNdz)
     {
         string ext = Path.GetExtension(file);
         if (RomExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase))
-            romFiles.Add(file);
+        {
+            romFiles.Add(RomSource.ForFile(file));
+        }
         else if (ext.Equals(".ndz", StringComparison.OrdinalIgnoreCase))
+        {
             skippedNdz++;
+        }
+        else if (ArchiveExtractor.IsSupportedArchive(file))
+        {
+            // A real ROM collection often has each game as its own separate archive
+            // file - list what it holds (cheap, no decompression yet) and add a
+            // RomSource pointer per match, which only actually reads (and
+            // decompresses) that one entry once something needs its bytes - no
+            // extraction to disk at any point. Only .nds/.dsi are looked for here - an
+            // .ndz inside an archive isn't something Pack wants either, matching a
+            // loose one dropped directly (though it isn't counted in skippedNdz, unlike
+            // a loose file - listing a second time just to find those felt like more
+            // archive-opening cost than the message is worth).
+            try
+            {
+                foreach (string key in ArchiveExtractor.ListMatchingEntryKeys(file, RomExtensions))
+                    romFiles.Add(RomSource.ForArchiveEntry(file, key));
+            }
+            catch (Exception)
+            {
+                // Corrupt, encrypted, or otherwise unreadable archive - contributes
+                // nothing, same as an unreadable folder elsewhere in this method's own
+                // caller.
+            }
+        }
     }
 
-    private sealed record DecodedRom(string Path, byte[] Rgba, string ShortTitle, string FullTitle, string GameCode, byte UnitCode, string DestinationLabel, string RegionLockLabel, byte RomVersion, ushort BannerVersion, long FileSizeBytes);
+    private sealed record DecodedRom(RomSource Source, byte[] Rgba, string ShortTitle, string FullTitle, string GameCode, byte UnitCode, string DestinationLabel, string RegionLockLabel, byte RomVersion, ushort BannerVersion, long FileSizeBytes);
 
-    private static (DecodedRom? Decoded, string? Error) TryDecode(string path)
+    private static (DecodedRom? Decoded, string? Error) TryDecode(RomSource source)
     {
         byte[] rom;
         try
         {
-            rom = File.ReadAllBytes(path);
+            rom = source.ReadBytes();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return (null, $"Couldn't read \"{Path.GetFileName(path)}\": {ex.Message}");
+            return (null, $"Couldn't read \"{source.ShortLabel}\": {ex.Message}");
         }
 
         NdsRomInfo info;
@@ -194,14 +235,14 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         catch (InvalidDataException ex)
         {
-            return (null, $"\"{Path.GetFileName(path)}\" doesn't look like a valid ROM: {ex.Message}");
+            return (null, $"\"{source.ShortLabel}\" doesn't look like a valid ROM: {ex.Message}");
         }
 
         try
         {
             byte[] rgba = NdsIcon.DecodeBitmap(info.Banner);
             var decoded = new DecodedRom(
-                path,
+                source,
                 rgba,
                 NdsIcon.DecodeShortTitle(info.Banner),
                 NdsIcon.DecodeTitle(info.Banner),
@@ -219,12 +260,12 @@ public partial class MainWindowViewModel : ViewModelBase
             // Genuinely unexpected at this point (FromRom already validated the header
             // and banner region) - surfaced rather than left to crash the app, since this
             // is meant to be pointed at arbitrary real-world ROM dumps.
-            return (null, $"Decoded the header but failed on the icon/banner for \"{Path.GetFileName(path)}\": {ex.Message}");
+            return (null, $"Decoded the header but failed on the icon/banner for \"{source.ShortLabel}\": {ex.Message}");
         }
     }
 
     private RomEntryViewModel ToViewModel(DecodedRom decoded, Action<RomEntryViewModel> onRemove) => new(
-        filePath: decoded.Path,
+        source: decoded.Source,
         icon: ToBitmap(decoded.Rgba),
         shortTitle: decoded.ShortTitle,
         fullTitle: decoded.FullTitle,

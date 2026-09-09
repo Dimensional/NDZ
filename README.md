@@ -21,12 +21,26 @@ implementation status, and provenance, and
 Implemented: compression, random-access decompression, raw-content dictionary support
 (including for dictionaries past zstd's implicit ~8 MiB window default), all five
 per-block byte-transform filter modes, base-ROM patch mode (windowed dictionary
-compression against a base ROM, not a binary diff), and the pair-container format for
-shipping a whole family of ROMs together in one self-contained file - a star topology:
-one shared base plus any number of targets, each base-patched against that same base
-(never against each other), so e.g. every regional/version release of one game can go
-in a single file, not just a base+one-target pair. The only thing left unimplemented is
+compression against a base ROM, not a binary diff), <!-- PAIR-DISABLED:strikethrough-start -->~~and the pair-container format
+for shipping a whole family of ROMs together in one self-contained file - a star
+topology: one shared base plus any number of targets, each base-patched against that
+same base (never against each other), so e.g. every regional/version release of one
+game can go in a single file, not just a base+one-target pair~~ (creating one is
+currently disabled - see the notice below; *reading* an existing pair container is
+unaffected)<!-- PAIR-DISABLED:strikethrough-end -->. The only thing left unimplemented is
 a retired, never-produced trained-dictionary flag not worth building.
+
+<!-- PAIR-DISABLED:notice-start — delete this whole blockquote, and the strikethrough
+     markup immediately above, once PairContainerPolicy.CreationEnabled is true again
+     (src/Ndz.Core/Compression/PairContainerPolicy.cs) - nothing else in this file needs
+     to change either way. -->
+> **🚫 Pair-container creation is temporarily disabled**, in both the CLI and the GUI.
+> The format author hasn't confirmed the real multi-ROM dictionary design yet - see
+> [`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the full story. *Reading* an
+> existing pair container - `decompress`/`info`/`verify` with `--index`, or the GUI's own
+> Examine view - is entirely unaffected; only *creating* a new one (`compress --pair-out`)
+> is refused.
+<!-- PAIR-DISABLED:notice-end -->
 
 ## Diagrams
 
@@ -73,6 +87,10 @@ ndz compress <in.nds> <out.ndz> [--level 1-19] [--block-size 8192|16384|32768|au
                                                   skips the default decode-and-byte-compare
                                                   check that runs after every pack.
 ndz compress <target1.nds> [target2.nds ...] --pair-out <pair.ndz> --base <base.nds>
+                                                  [TEMPORARILY DISABLED - see notice above.
+                                                  PAIR-DISABLED: delete this bracketed line
+                                                  when re-enabling; the rest of this entry
+                                                  is left intact and accurate as-is.]
                                                   Pack a base plus one or more base-patched
                                                   targets into one self-contained file - a
                                                   star topology: every target is patched
@@ -111,6 +129,10 @@ ndz analyze <in.nds> [--base <base.nds>] [--max-dict <size>] [--level N] [--bloc
                                                   and --block-size auto run internally.
 ndz analyze <target1.nds> [target2.nds ...] --base <base.nds> --pair
             [--max-dict <size>] [--level N] [--block-size N]
+                                                  Still works as a preview even while
+                                                  --pair-out itself is disabled (see notice
+                                                  above) - PAIR-DISABLED: no change needed
+                                                  here when re-enabling.
                                                   Previews what compress --pair-out
                                                   --block-size auto --raw-dict auto would
                                                   choose, without a real pack: the base and
