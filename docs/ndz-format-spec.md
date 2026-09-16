@@ -106,7 +106,7 @@ packer: it is not simply a set of independent boolean flags.
 | 3 | `Filters` — **not really about filter transforms specifically**: this bit gates whether a per-block mode array exists in each frame at all. Without it, every block in a frame is uniformly `Dict` (if a dictionary is present) or `Plain` (if not) — no per-block byte to read. `NdzWriter` always writes a mode array (even when every block is Plain/Dict, no real filter transform involved) and so must always set this bit — confirmed empirically 2026-08-31 by cross-testing against `ndztool.py`'s real decoder in both directions; see "Per-block compression mode" below. |
 | 4 | `BasePatch` — this file's frames encode a patch against a base `.nds` (previously the only bit this spec documented) |
 | 5 | `RawDictionary` — a raw, self-referential content-dictionary section follows the front-matter |
-| 6 | never set by the reference packer, but **observed set** (alongside bit 4) in real ndz-studio output from its 2026-09-16-era "Pack hack" feature — see "xdelta-based hack container" below. Meaning partially reverse-engineered, not yet fully understood or implemented here. |
+| 6 | never set by the reference packer, but **observed set** (alongside bit 4) in real ndz-studio output from its 2026-09-16-era "Pack hack" feature — see "xdelta-based hack container" below. Meaning fully reverse-engineered 2026-09-16; not yet implemented (read or write) in `Ndz.Core`. |
 | 7 | never observed set — reserved/unknown |
 | 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against `ndztool.py`'s own decode logic (see "Reference materials"). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's width is confirmed exactly 8 bits (bits 8-15) by `ndztool.py`'s own `describe_flags`, which computes `(flags >> 8) & 0xFF`. |
 
@@ -551,7 +551,7 @@ Only the retired trained-dictionary flag (bit 2) remains genuinely out of scope 
 deliberately so, not silently dropped: `NdzFlags` documents exactly why, and both read
 and write paths reject anything that would require it rather than mishandling it.
 
-### xdelta-based `.delta.ndz` / hack container — partially reverse-engineered 2026-09-16, blocked
+### xdelta-based `.delta.ndz` / hack container — fully reverse-engineered 2026-09-16
 
 ndz-studio added a "Pack hack" feature: give it a base ROM and either a second ROM or an
 existing `.xdelta` patch, and it produces a `.delta.ndz` (alongside a plain, standalone
@@ -559,11 +559,17 @@ existing `.xdelta` patch, and it produces a `.delta.ndz` (alongside a plain, sta
 words: *"you get a small .delta.ndz that holds only what the hack changes; the cart takes
 the rest from the base .ndz while you play."* No spec or sample from Mena exists for this;
 `ndztool.py` has no code path for it at all - confirmed by testing it directly, it can't
-open one (see below). Everything here comes from reverse-engineering three real files Mena's
-own tool produced (a real base `.ndz`, a real `.delta.ndz`, and the standalone `.xdelta` it
-was built from - saved for reference at `E:\source\git\NitroTwl\test_files`, outside this
-repo). **Do not guess further on the unresolved part below - wait for real information from
-Mena.**
+open one. Everything here comes from reverse-engineering three real files Mena's own tool
+produced (a real base `.ndz`, a real `.delta.ndz`, and the standalone `.xdelta` it was built
+from - saved for reference at `E:\source\git\NitroTwl\test_files`, outside this repo), plus
+reading `ndzcore.js`, the real wasm-bindgen glue Mena's own site loads (fetched directly from
+`https://pheeeeenom.github.io/ndz-studio/`, not guessed) - its doc comment on
+`pack_delta_ndz(base, target, base_ndz, name, version)` was the key that cracked the last
+piece: *"`base` is the base .nds, `target` the patched rom (xdelta3-wasm applies the patch
+page-side), `base_ndz` the base .ndz the hack will attach to on the cart; it must be a pack
+of this exact base and carry the header-crc field."* **Reconstructing the real sample's full
+256 MB target ROM under the rules below matches the real ROM byte-for-byte, all 32,768
+blocks - fully solved, not a partial result.**
 
 **What's confirmed, byte-exact against the real reconstructed ROM:**
 
@@ -594,28 +600,33 @@ Mena.**
   sample use this mode.
 - Modes 1 and 3-6 (plain/delta/shuffle) are the *existing*, already-implemented per-block
   filter modes, self-contained, no base reference - unchanged and confirmed correct.
-- Reconstructing the full 256 MB target ROM this way (mode 7 via its stored offset, modes
-  1/3-6 as normal, mode 0 - see below - left unsolved) matches the real ROM exactly for
-  32,650 of 32,768 blocks (99.6%).
+- **Mode 0** ("dict" in the pre-existing enum) blocks are zstd-compressed against a raw
+  content dictionary built from **the base `.ndz`'s own embedded raw-dict section**
+  (`RawDictionary`/bit 5's dictionary blob, sitting right after the base file's own 16 KiB
+  front-matter) - not any offset into the raw base ROM at all, which is why every guess based
+  on the base `.nds` alone failed no matter what window or offset was tried. This is exactly
+  what `pack_delta_ndz`'s `base_ndz` parameter is for: the hack packer reuses whatever
+  dictionary the base's own `.ndz` was already built with, rather than deriving a new one.
+  This only works when the base was packed with a raw dict in the first place (as the real
+  sample's `Black..._dict6m.ndz` was) - presumably a base packed without one falls back to
+  something else for its hack's mode-0 blocks, not yet observed. 133 of 32,768 blocks (0.4%)
+  in the real sample use this mode.
+- Reconstructing the full 256 MB target ROM this way - mode 7 via its stored offset, modes
+  1/3-6 as normal, mode 0 against the base `.ndz`'s own raw-dict section - matches the real
+  ROM **exactly, all 32,768 of 32,768 blocks**.
 
-**What's still unresolved:** mode **0** (133 blocks in the real sample, 118 still unexplained
-after solving mode 7 - about 0.36% of the file, ~870 KB of the payload). It clearly needs a
-raw-content zstd dictionary (it fails to decompress without one) but exhaustive testing ruled
-out: any block-aligned offset anywhere in the entire base ROM (brute-forced all ~32,768
-candidate positions - zero matches), a leading or trailing stored offset in the block's own
-bytes the way mode 7 has, self-referential already-decoded target content, and the real
-`.xdelta` patch's own COPY-instruction address map (resolved only 4 of 133). Whatever
-dictionary source mode 0 uses, it isn't any of these - likely a non-block-aligned offset into
-the base that isn't stored anywhere obvious, which isn't practical to brute-force at byte
-granularity. **Paused here** pending real information from Mena, per this project's standing
-rule against guessing at format details without a real reference.
-
-xdelta/VCDIFF itself does not appear to be embedded in the on-disk `.delta.ndz` at all,
-despite the feature's name - real xdelta3 is used PC-side only, to reconstruct the full
-target ROM from base + patch before packing, confirming the user's suspicion over the
-initial assumption that the container itself would carry VCDIFF data (see
+xdelta/VCDIFF itself is not embedded in the on-disk `.delta.ndz` at all, despite the
+feature's name - real xdelta3 is used PC-side only, to reconstruct the full target ROM from
+base + patch before packing (confirmed directly from `pack_delta_ndz`'s own doc comment, "
+xdelta3-wasm applies the patch page-side"), confirming the user's suspicion over the initial
+assumption that the container itself would carry VCDIFF data (see
 `docs/xdelta-vcdiff-notes.md` for the standalone VCDIFF/DJW codec, which remains correct and
-useful on its own - this container question is orthogonal to it).
+useful on its own - this container question was orthogonal to it and is now separately
+closed out).
+
+**Not yet implemented in `Ndz.Core`** - this section documents the format as understood, not
+a working reader/writer yet. See `docs/ndz-remaining-work.md` for whether/when that's
+picked up.
 
 ## Reference materials
 
