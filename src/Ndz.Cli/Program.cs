@@ -1,6 +1,7 @@
 using Nanook.GrindCore;
 using Ndz.Core.Compression;
 using Ndz.Core.Format;
+using Ndz.Core.XDelta;
 
 return Run(args);
 
@@ -26,6 +27,10 @@ static int Run(string[] args)
                 return RunInfo(args[1..]);
             case "verify":
                 return RunVerify(args[1..]);
+            case "patch-apply":
+                return RunPatchApply(args[1..]);
+            case "patch-make":
+                return RunPatchMake(args[1..]);
             case "-h":
             case "--help":
             case "help":
@@ -199,6 +204,17 @@ static void PrintUsage()
           ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--index N]
                                                              Decompress and byte-compare against the
                                                              original .nds.
+          ndz patch-apply <base.nds> <patch.xdelta> <out.nds>
+                                                             Apply an xdelta3/VCDIFF patch (RFC 3284)
+                                                             against a base ROM to reconstruct a target -
+                                                             a version diff (one release against another)
+                                                             or a ROM hack against a vanilla dump. This is
+                                                             the PC-side step ndz-studio's own site
+                                                             describes ahead of packing the result as a
+                                                             normal `compress --base` .ndz.
+          ndz patch-make <base.nds> <target.nds> <out.xdelta>
+                                                             Generate an xdelta3/VCDIFF patch describing
+                                                             how to turn <base.nds> into <target.nds>.
 
         Notes:
           - ROMs should be decrypted first; NDZ compresses raw bytes as-is.
@@ -935,6 +951,43 @@ static int RunInfo(string[] args)
     Console.WriteLine($"Dictionary:         {(frontMatter.HasDictionary ? $"{frontMatter.DictionaryDecompressedSize:N0} bytes (decompressed)" : "none")}");
     if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch))
         Console.WriteLine($"Base ROM:           0x{frontMatter.BaseGameCode:X8}, {frontMatter.BaseOriginalSize:N0} bytes (needed to decompress)");
+    return 0;
+}
+
+static int RunPatchApply(string[] args)
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: ndz patch-apply <base.nds> <patch.xdelta> <out.nds>");
+        return 1;
+    }
+
+    string basePath = args[0], patchPath = args[1], outPath = args[2];
+    byte[] baseRom = File.ReadAllBytes(basePath);
+    byte[] patch = File.ReadAllBytes(patchPath);
+    byte[] target = XDeltaCodec.Apply(baseRom, patch);
+    File.WriteAllBytes(outPath, target);
+
+    Console.WriteLine($"Wrote '{outPath}' ({target.Length:N0} bytes).");
+    return 0;
+}
+
+static int RunPatchMake(string[] args)
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: ndz patch-make <base.nds> <target.nds> <out.xdelta>");
+        return 1;
+    }
+
+    string basePath = args[0], targetPath = args[1], outPath = args[2];
+    byte[] baseRom = File.ReadAllBytes(basePath);
+    byte[] target = File.ReadAllBytes(targetPath);
+    byte[] patch = XDeltaCodec.Generate(baseRom, target);
+    File.WriteAllBytes(outPath, patch);
+
+    double ratio = target.Length == 0 ? 0 : (double)patch.Length / target.Length;
+    Console.WriteLine($"Wrote '{outPath}': {target.Length:N0} -> {patch.Length:N0} bytes ({ratio:P1}).");
     return 0;
 }
 

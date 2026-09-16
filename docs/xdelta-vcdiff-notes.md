@@ -1,12 +1,51 @@
 # xdelta3 / VCDIFF — compatibility notes and open questions
 
-Status: **investigation complete, nothing wired in.** Written 2026-09-15 after the user asked
-whether xdelta3 patch generation/reading could become an alternative (not yet decided how —
-see "Open question" below) to NDZ's current multi-game packaging. The investigation itself
-happened in a sibling project, Gog.Net (an unofficial GOG.com client library), which needed to
-apply real GOG-issued xdelta3 patches; this doc generalizes what was confirmed there since none
-of it is GOG-specific. See `reference/xdelta-csharp/` for the actual working code this
-produced — detached, not referenced by `NDZ.slnx` or anything under `src/`.
+**Update 2026-09-16: a real, from-scratch VCDIFF+DJW codec is now implemented and wired in**,
+on branch `xdelta/vcdiff-codec` (kept off `master` until the container-format question below
+is resolved) — `src/Ndz.Core/XDelta/` (apply + generate, RFC 3284 default code table, address
+cache, Adler32) and `src/Ndz.Core/XDelta/Djw/` (the full DJW secondary compressor: decode and
+the complete multi-group adaptive encoder, not a cut-down version). `XDeltaCodec.Apply`/
+`Generate` are the public entry points; `ndz patch-apply`/`ndz patch-make` are the CLI
+commands. Confirmed **byte-exact against a real `xdelta3.exe` 3.2.0 build in both directions,
+with real DJW (Static Huffman) secondary compression genuinely exercised on both sides**:
+
+- Our encoder (with our own from-scratch DJW compressor) → real `xdelta3.exe -d` applies it
+  correctly; `xdelta3 printhdr` confirms it reads `VCDIFF secondary compressor: Static Huffman`
+  and `VCD_DATACOMP` on our own output.
+- Real `xdelta3.exe -e -S djw` → our decoder applies it correctly, including correctly parsing
+  xdelta3's `VCD_APPHEADER` extension (the filename/hash block it embeds) to skip past it.
+- Also confirmed in the plain (no secondary compression) case, both directions, on a real
+  4 MiB synthetic ROM-hack-shaped diff.
+
+The DJW implementation was built from real source, not guessed: the exact algorithm/constants
+from `xdelta3/xdelta3-djw.h` (tag v3.2.0, `jmacd/xdelta`), the general canonical-Huffman
+construction technique (heap-based build with length-limiting retry, same tie-break rule) cross-
+checked against GrindCore's own vendored real bzip2 1.0.8 source
+(`external/bzip2/bzip2/huffman.c`, `BZ2_hbMakeCodeLengths`/`BZ2_hbAssignCodes` — DJW's own
+header credits bzip2 for this technique), and the wire-level detail that a secondary-compressed
+VCDIFF section is `[varint: decompressed size][DJW bitstream]` — confirmed from
+`xdelta3-second.h`'s `xd3_encode_secondary`/`xd3_decode_secondary`, not part of DJW's own window
+format. See `src/Ndz.Core/XDelta/Djw/DjwCodec.cs`'s own remarks for the full trace.
+
+**Corrected from the original 2026-09-15 assumption below**: the user confirmed the DS Pico
+cart itself decodes VCDIFF/xdelta live, on the fly, while playing — this is not a purely
+PC-side preprocessing step (see "Open question" below, still open: the on-cart
+`.delta.ndz`/`xdelta.ndz` container/indexing format that makes that possible over what's
+fundamentally a sequential format is unconfirmed, blocked on a real reference from Mena, and
+explicitly out of scope for what's built so far). What *is* now real: applying/generating
+standalone `.xdelta`/VCDIFF patches — useful for both ROM hacks and version diffs — works
+correctly and interoperates with the real tooling.
+
+---
+
+Status (original, 2026-09-15): **investigation complete, nothing wired in.** Written after the
+user asked whether xdelta3 patch generation/reading could become an alternative (not yet
+decided how — see "Open question" below) to NDZ's current multi-game packaging. The
+investigation itself happened in a sibling project, Gog.Net (an unofficial GOG.com client
+library), which needed to apply real GOG-issued xdelta3 patches; this doc generalizes what was
+confirmed there since none of it is GOG-specific. See `reference/xdelta-csharp/` for the actual
+working code this produced — detached, not referenced by `NDZ.slnx` or anything under `src/`
+(now superseded by the real implementation above, but left as historical reference).
 
 ## Open question — what role does xdelta3 actually play here? Not yet decided.
 
