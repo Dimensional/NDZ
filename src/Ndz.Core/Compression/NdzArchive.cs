@@ -37,6 +37,12 @@ public sealed class NdzArchive : IDisposable
     private readonly ZStdBlock? _dictBlock;
     private readonly int _blockSize;
     private readonly byte[]? _baseRom;
+    // Only populated for a HackContainer file - the base .ndz's own fully-decompressed
+    // ROM bytes, needed for BlockMode.Verbatim's verbatim-copy-from-an-explicit-offset
+    // blocks. Deliberately a separate field from _baseRom (which serves ordinary
+    // base-patch windows against a raw .nds) rather than overloading one field for two
+    // different meanings.
+    private readonly byte[]? _baseNdzDecompressed;
     // One ZStdBlock per distinct base-window offset actually encountered, built lazily
     // and kept for the archive's lifetime (a windowed dictionary decompressor is
     // expensive to construct, and the same window offset can recur across many blocks -
@@ -59,12 +65,13 @@ public sealed class NdzArchive : IDisposable
     /// <summary>Total decompressed length - the original .nds size.</summary>
     public long Length => FrontMatter.OriginalSize;
 
-    private NdzArchive(byte[] data, NdzFrontMatter frontMatter, SeekTableEntry[] seekTable, long payloadStart, byte[]? dictionary, byte[]? baseRom)
+    private NdzArchive(byte[] data, NdzFrontMatter frontMatter, SeekTableEntry[] seekTable, long payloadStart, byte[]? dictionary, byte[]? baseRom, byte[]? baseNdzDecompressed)
     {
         _data = data;
         FrontMatter = frontMatter;
         SeekTable = seekTable;
         _baseRom = baseRom;
+        _baseNdzDecompressed = baseNdzDecompressed;
         // Read from the file's own flags rather than assuming NdzConstants.BlockSize:
         // that constant is only what NdzWriter always produces by default (matching
         // pack.rs's fixed 8 KiB), but block size is a real per-file variable - ndztool.py's
@@ -91,20 +98,54 @@ public sealed class NdzArchive : IDisposable
     /// <param name="baseRom">
     /// The base .nds this file was patched against (see <see cref="NdzFlags.BasePatch"/>/
     /// <see cref="BaseRomIndex"/>) - required whenever the file's own front-matter has
-    /// `BasePatch` set (verified immediately against the front-matter's own base size/
-    /// gameCode/header-hash fields, matching `ndztool.py`'s own `decode_ndz_blob`
-    /// checks exactly), and otherwise ignored if supplied for a file that doesn't need
-    /// it - also matching the reference's own leniency there.
+    /// `BasePatch` set WITHOUT <see cref="NdzFlags.HackContainer"/> (verified immediately
+    /// against the front-matter's own base size/gameCode/header-hash fields, matching
+    /// `ndztool.py`'s own `decode_ndz_blob` checks exactly), and otherwise ignored if
+    /// supplied for a file that doesn't need it - also matching the reference's own
+    /// leniency there. Not used for a <see cref="NdzFlags.HackContainer"/> file - see
+    /// <paramref name="baseNdzBytes"/> instead.
     /// </param>
-    public static NdzArchive Open(byte[] ndzBytes, byte[]? baseRom = null)
+    /// <param name="baseNdzBytes">
+    /// The already-packed base <c>.ndz</c> this hack attaches to (see
+    /// <see cref="NdzFlags.HackContainer"/>) - required whenever the file's own
+    /// front-matter has `HackContainer` set. Unlike ordinary base-patch mode, this format
+    /// doesn't verify base identity against stored size/gameCode/hash fields (they're all
+    /// zero) - decoding against the wrong base .ndz silently produces garbage, the same
+    /// as the real format itself. Internally opened once to get its fully-decompressed
+    /// ROM bytes (for <see cref="BlockMode.Verbatim"/> blocks) and its own raw-dict
+    /// section, if any (for <see cref="BlockMode.Dict"/> blocks, via
+    /// <see cref="ReadRawDictionary"/>) - not used at all for a non-hack file.
+    /// </param>
+    public static NdzArchive Open(byte[] ndzBytes, byte[]? baseRom = null, byte[]? baseNdzBytes = null)
     {
         ArgumentNullException.ThrowIfNull(ndzBytes);
         if (ndzBytes.Length < NdzConstants.FrontMatterSize + NdzConstants.TrailerFooterSize)
             throw new InvalidDataException("File is too small to be a valid .ndz (shorter than front-matter + trailer footer).");
 
         var frontMatter = NdzFrontMatter.Read(ndzBytes.AsSpan(0, NdzConstants.FrontMatterSize));
+        bool isHackContainer = frontMatter.Flags.HasFlag(NdzFlags.HackContainer);
 
-        if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch))
+        byte[]? baseNdzDecompressed = null;
+        byte[]? dictionaryForDecode = null;
+
+        if (isHackContainer)
+        {
+            if (baseNdzBytes == null)
+            {
+                throw new NotSupportedException(
+                    "This .ndz is a hack container (flags bit 6, HackContainer) and needs the base .ndz " +
+                    "it attaches to - pass it as NdzArchive.Open's baseNdzBytes parameter.");
+            }
+            // No base-identity verification here (unlike ordinary base-patch mode below) -
+            // the real format doesn't store one for this variant (BaseOriginalSize/
+            // BaseGameCode/BaseHeaderHash are all zero), so decoding against the wrong
+            // base .ndz is a silent-garbage risk inherent to the real format, not a gap in
+            // this port.
+            using var baseArchive = Open(baseNdzBytes);
+            baseNdzDecompressed = baseArchive.DecompressAll();
+            dictionaryForDecode = ReadRawDictionary(baseNdzBytes);
+        }
+        else if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch))
         {
             if (baseRom == null)
             {
@@ -127,28 +168,16 @@ public sealed class NdzArchive : IDisposable
                 throw new InvalidDataException("Base ROM header hash mismatch - wrong base ROM.");
         }
 
-        byte[]? dictionary = null;
-        if (frontMatter.HasDictionary)
+        if (!isHackContainer && frontMatter.HasDictionary)
         {
-            // The dictionary section is documented as "raw bytes, verbatim" - not
-            // separately compressed. NdzWriter always stores stored == decompressed for
-            // exactly that reason; a file claiming otherwise uses a variant this reader
-            // doesn't understand, so fail loudly rather than misinterpret it.
-            if (frontMatter.DictionaryStoredSize != frontMatter.DictionaryDecompressedSize)
-            {
-                throw new NotSupportedException(
-                    $"This .ndz's dictionary section has a different stored size ({frontMatter.DictionaryStoredSize}) " +
-                    $"than decompressed size ({frontMatter.DictionaryDecompressedSize}) - a compressed dictionary " +
-                    "section isn't supported (the format is documented as verbatim raw bytes).");
-            }
-
-            long dictEnd = (long)NdzConstants.FrontMatterSize + frontMatter.DictionaryStoredSize;
-            if (dictEnd > ndzBytes.Length)
-                throw new InvalidDataException("Declared dictionary section runs past the end of the file.");
-
-            dictionary = ndzBytes.AsSpan(NdzConstants.FrontMatterSize, (int)frontMatter.DictionaryStoredSize).ToArray();
+            // A HackContainer file never has its own dictionary section -
+            // dictionaryForDecode was already set above, from the base .ndz's dict instead.
+            dictionaryForDecode = ReadRawDictionary(ndzBytes);
         }
 
+        // frontMatter.DictionaryStoredSize reflects the actual on-disk layout regardless
+        // of HackContainer status (real hack containers never set it, but payloadStart
+        // must still be derived from whatever's actually on disk, not an assumption).
         var seekTable = ReadSeekTable(ndzBytes, frontMatter.DictionaryStoredSize, out long payloadStart);
 
         // Frame size isn't a fixed, format-wide constant - ndztool.py's own --frame-size
@@ -171,11 +200,49 @@ public sealed class NdzArchive : IDisposable
                 $"Seek table's total decompressed size ({decompressedTotal}) doesn't match originalSize ({frontMatter.OriginalSize}).");
         }
 
-        return new NdzArchive(ndzBytes, frontMatter, seekTable, payloadStart, dictionary, baseRom);
+        return new NdzArchive(ndzBytes, frontMatter, seekTable, payloadStart, dictionaryForDecode, baseRom, baseNdzDecompressed);
     }
 
-    public static NdzArchive OpenFile(string path, string? baseRomPath = null) =>
-        Open(File.ReadAllBytes(path), baseRomPath == null ? null : File.ReadAllBytes(baseRomPath));
+    public static NdzArchive OpenFile(string path, string? baseRomPath = null, string? baseNdzPath = null) =>
+        Open(
+            File.ReadAllBytes(path),
+            baseRomPath == null ? null : File.ReadAllBytes(baseRomPath),
+            baseNdzPath == null ? null : File.ReadAllBytes(baseNdzPath));
+
+    /// <summary>
+    /// Extracts an already-packed .ndz's own raw-dict section (<see cref="NdzFlags.RawDictionary"/>,
+    /// bit 5) verbatim, or null if it has none. Public so both a hack-container writer
+    /// (priming a <see cref="BlockMode.Dict"/> compressor from the base's own dict) and
+    /// <see cref="Open"/> itself (priming a <see cref="BlockMode.Dict"/> decompressor for
+    /// a <see cref="NdzFlags.HackContainer"/> file) can reuse it, rather than
+    /// re-implementing front-matter parsing and offset arithmetic.
+    /// </summary>
+    public static byte[]? ReadRawDictionary(byte[] ndzBytes)
+    {
+        ArgumentNullException.ThrowIfNull(ndzBytes);
+        if (ndzBytes.Length < NdzConstants.FrontMatterSize)
+            throw new InvalidDataException("File is too small to be a valid .ndz (shorter than the front-matter).");
+
+        var frontMatter = NdzFrontMatter.Read(ndzBytes.AsSpan(0, NdzConstants.FrontMatterSize));
+        if (!frontMatter.HasDictionary)
+            return null;
+
+        // Same invariant Open's own dictionary handling checks - the section is
+        // documented as verbatim raw bytes, never separately compressed.
+        if (frontMatter.DictionaryStoredSize != frontMatter.DictionaryDecompressedSize)
+        {
+            throw new NotSupportedException(
+                $"This .ndz's dictionary section has a different stored size ({frontMatter.DictionaryStoredSize}) " +
+                $"than decompressed size ({frontMatter.DictionaryDecompressedSize}) - a compressed dictionary " +
+                "section isn't supported (the format is documented as verbatim raw bytes).");
+        }
+
+        long dictEnd = (long)NdzConstants.FrontMatterSize + frontMatter.DictionaryStoredSize;
+        if (dictEnd > ndzBytes.Length)
+            throw new InvalidDataException("Declared dictionary section runs past the end of the file.");
+
+        return ndzBytes.AsSpan(NdzConstants.FrontMatterSize, (int)frontMatter.DictionaryStoredSize).ToArray();
+    }
 
     /// <summary>
     /// Reads a file's front-matter and seek table without requiring (or verifying) a
@@ -294,7 +361,11 @@ public sealed class NdzArchive : IDisposable
         int blockCount = (int)((entry.DecompressedSize + _blockSize - 1) / _blockSize);
 
         bool hasModesArray = FrontMatter.Flags.HasFlag(NdzFlags.Filters);
-        bool hasBaseOffArray = FrontMatter.Flags.HasFlag(NdzFlags.BasePatch);
+        // A HackContainer file sets BasePatch too, but does NOT have the baseOff[n] array
+        // that bit normally implies - confirmed by exact byte-accounting against a real
+        // sample (header is just [csize][mode], nothing else). Bit 6 changes what bit 4
+        // means here rather than adding to it - see NdzFlags.HackContainer's remarks.
+        bool hasBaseOffArray = FrontMatter.Flags.HasFlag(NdzFlags.BasePatch) && !FrontMatter.Flags.HasFlag(NdzFlags.HackContainer);
         BlockMode uniformMode = FrontMatter.HasDictionary ? BlockMode.Dict : BlockMode.Plain;
 
         int modesArraySize = hasModesArray ? blockCount : 0;
@@ -323,6 +394,38 @@ public sealed class NdzArchive : IDisposable
             var mode = hasModesArray ? (BlockMode)modes[b] : uniformMode;
             uint baseOff = hasBaseOffArray ? BinaryPrimitives.ReadUInt32LittleEndian(baseOffs.Slice(b * 4, 4)) : BaseRomIndex.NoWindowSentinel;
             int blockDsize = Math.Min(_blockSize, (int)entry.DecompressedSize - destOffset);
+
+            // Verbatim (hack-container mode 7) never goes through zstd at all - the
+            // block's "compressed data" slot is a literal 4-byte little-endian offset
+            // into the base .ndz's decompressed ROM bytes, and the block is exactly that
+            // many bytes copied straight across. Handled entirely separately from the
+            // decoder/filter machinery below, which doesn't apply to it.
+            if (mode == BlockMode.Verbatim)
+            {
+                if (_baseNdzDecompressed == null)
+                {
+                    throw new InvalidDataException(
+                        $"Frame {frameIndex} block {b} uses Verbatim/{(byte)BlockMode.Verbatim} mode, " +
+                        "but this archive has no base .ndz decompressed - only valid in a HackContainer file.");
+                }
+                if (srcOffset + 4 > blockData.Length)
+                    throw new InvalidDataException($"Frame {frameIndex} block {b}'s Verbatim offset runs past the frame's declared data.");
+
+                uint verbatimOffset = BinaryPrimitives.ReadUInt32LittleEndian(blockData.Slice(srcOffset, 4));
+                if ((long)verbatimOffset + blockDsize > _baseNdzDecompressed.Length)
+                {
+                    throw new InvalidDataException(
+                        $"Frame {frameIndex} block {b}'s Verbatim offset (0x{verbatimOffset:X}) plus its length " +
+                        $"({blockDsize}) runs past the end of the base .ndz's decompressed ROM " +
+                        $"({_baseNdzDecompressed.Length:N0} bytes).");
+                }
+
+                _baseNdzDecompressed.AsSpan((int)verbatimOffset, blockDsize).CopyTo(buffer.AsSpan(destOffset, blockDsize));
+
+                srcOffset += (int)blockCsize;
+                destOffset += blockDsize;
+                continue;
+            }
 
             // A recorded base-window offset takes priority over the mode byte entirely
             // (matches ndztool.py's decompress_v2_adv: `if boff != SENTINEL: ... elif
@@ -359,7 +462,7 @@ public sealed class NdzArchive : IDisposable
             {
                 throw new NotSupportedException(
                     $"Frame {frameIndex} block {b} uses compression mode {(byte)mode}, which isn't a " +
-                    "recognized BlockMode value (0-6) - the file may be corrupt or use a format extension " +
+                    "recognized BlockMode value (0-7) - the file may be corrupt or use a format extension " +
                     "this port doesn't know about.");
             }
 

@@ -624,9 +624,16 @@ assumption that the container itself would carry VCDIFF data (see
 useful on its own - this container question was orthogonal to it and is now separately
 closed out).
 
-**Not yet implemented in `Ndz.Core`** - this section documents the format as understood, not
-a working reader/writer yet. See `docs/ndz-remaining-work.md` for whether/when that's
-picked up.
+**Implemented 2026-09-16** - `NdzFlags.HackContainer` (bit 6), `BlockMode.Verbatim` (mode 7),
+`Compression.HackContainerWriter` (write) and `Compression.NdzArchive.Open`'s `baseNdzBytes`
+parameter (read), reusing a promoted `XDelta.HashChainMatcher` (shared with `VcdiffEncoder`)
+for mode 7's exact-match search. Verified both ways against real files: our reader decodes a
+genuine ndz-studio-produced `.delta.ndz` byte-exact against the real White ROM, and our own
+writer's output round-trips byte-exact against the real Black/White ROMs too (not expected to
+be byte-identical to ndz-studio's own file - its candidate-selection heuristics are its own -
+but correct). See `tests/Ndz.Core.Tests/HackContainerTests.cs` and
+`HackContainerRealFileTests.cs`. Not yet wired into the CLI or GUI - see
+`docs/ndz-remaining-work.md`.
 
 ## Reference materials
 

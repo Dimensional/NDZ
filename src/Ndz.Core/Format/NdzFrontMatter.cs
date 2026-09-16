@@ -105,6 +105,18 @@ public sealed class NdzFrontMatter
                 "content dictionary (flags bit 5, RawDictionary) is supported.");
         }
 
+        // HackContainer (bit 6) always accompanies BasePatch (bit 4) in the confirmed real
+        // format - it changes what BasePatch means (no baseOff[n] array, base-identity
+        // fields all zero, GameCode repurposed) rather than standing alone. A file with bit
+        // 6 set but not bit 4 uses some combination this port doesn't recognize - fail
+        // loudly here rather than let NdzArchive misparse its frame headers.
+        if (flags.HasFlag(NdzFlags.HackContainer) && !flags.HasFlag(NdzFlags.BasePatch))
+        {
+            throw new NotSupportedException(
+                "This .ndz sets flags bit 6 (HackContainer) without bit 4 (BasePatch) - an " +
+                "unrecognized combination; the confirmed hack-container format always sets both.");
+        }
+
         return new NdzFrontMatter
         {
             OriginalSize = BinaryPrimitives.ReadUInt32LittleEndian(source[0x0008..]),

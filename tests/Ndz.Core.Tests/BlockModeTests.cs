@@ -6,11 +6,12 @@ namespace Ndz.Core.Tests;
 
 /// <summary>
 /// Confirms the reader fails loudly - naming the exact frame/block/mode - on a mode byte
-/// it genuinely can't handle (an out-of-range value, or Dict/0 with no dictionary
-/// section present), rather than misinterpreting bytes it doesn't understand. All 7
-/// named <see cref="BlockMode"/> values (Plain/Dict/the five filters) are implemented -
-/// see <see cref="BlockFiltersTests"/> and <see cref="DictionaryRoundTripTests"/> for
-/// those.
+/// it genuinely can't handle (an out-of-range value, Dict/0 with no dictionary section
+/// present, or Verbatim/7 outside a HackContainer file), rather than misinterpreting
+/// bytes it doesn't understand. The 7 named <see cref="BlockMode"/> values Plain/Dict/the
+/// five filters are implemented - see <see cref="BlockFiltersTests"/> and
+/// <see cref="DictionaryRoundTripTests"/> for those; <see cref="BlockMode.Verbatim"/> (8th
+/// value, hack-container-only) is covered by <c>HackContainerTests</c>.
 /// </summary>
 public class BlockModeTests
 {
@@ -114,10 +115,10 @@ public class BlockModeTests
         Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, archive.DecompressAll());
     }
 
-    /// <summary>Dict/0 with no dictionary section, and any value outside the 7 defined <see cref="BlockMode"/> values (7-255), are the only mode bytes this reader can't handle.</summary>
+    /// <summary>Dict/0 with no dictionary section, and any value outside the 8 defined <see cref="BlockMode"/> values (8-255), are unhandleable regardless of file type.</summary>
     [Theory]
     [InlineData(0)]
-    [InlineData(7)]
+    [InlineData(8)]
     [InlineData(255)]
     public void UnhandleableMode_ThrowsNamingFrameBlockAndMode(byte modeByte)
     {
@@ -128,5 +129,18 @@ public class BlockModeTests
         Assert.Contains("frame 0", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("block 0", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(modeByte.ToString(), ex.Message);
+    }
+
+    /// <summary>Verbatim/7 is a recognized mode value, but only meaningful in a HackContainer file (which supplies the base .ndz's decompressed bytes it copies from) - outside one, it fails loudly rather than reading garbage.</summary>
+    [Fact]
+    public void VerbatimMode_OutsideHackContainer_ThrowsInvalidData()
+    {
+        using var archive = NdzArchive.Open(BuildSingleBlockNdz((byte)BlockMode.Verbatim));
+
+        var ex = Assert.Throws<InvalidDataException>(() => archive.DecompressAll());
+
+        Assert.Contains("frame 0", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("block 0", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Verbatim", ex.Message);
     }
 }

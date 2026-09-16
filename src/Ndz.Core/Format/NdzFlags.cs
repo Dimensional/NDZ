@@ -8,8 +8,10 @@ namespace Ndz.Core.Format;
 /// `NDZ_FLAG_BASE`/`NDZ_FLAG_RAWDICT`): bits 0/1/2/3/5 are named boolean flags, bit 4 is
 /// the base-ROM/patch flag, and bits 8+ hold an embedded numeric subfield (the block
 /// size, as log2) rather than another boolean - see <see cref="NdzFlagsExtensions"/>.
-/// Bits 6-7 are still never set by either reference and remain reserved/unknown. Do not
-/// repurpose any undefined bit speculatively.
+/// Bit 6 is <see cref="HackContainer"/>, reverse-engineered 2026-09-16 from real
+/// ndz-studio output (`ndztool.py` doesn't know about it at all). Bit 7 is still never
+/// set by either reference and remains reserved/unknown. Do not repurpose any undefined
+/// bit speculatively.
 /// </summary>
 [Flags]
 public enum NdzFlags : uint
@@ -82,7 +84,23 @@ public enum NdzFlags : uint
     /// </summary>
     RawDictionary = 1u << 5,
 
-    // Bits 6-7: never set by either reference implementation - reserved/unknown.
+    /// <summary>
+    /// Bit 6. ndz-studio's "Pack hack" feature (a ROM hack or version diff packed cheaply
+    /// against a base ROM) - reverse-engineered 2026-09-16 from real output, since
+    /// neither reference tool documents or produces it (`ndztool.py` has no code path for
+    /// this at all). See docs/ndz-format-spec.md's "xdelta-based `.delta.ndz` / hack
+    /// container" section for the full writeup. Set alongside <see cref="BasePatch"/>,
+    /// but changes what that bit means rather than extending it: no per-frame
+    /// `baseOff[n]` array exists despite BasePatch being set, the base-identity fields
+    /// (`BaseOriginalSize`/`BaseGameCode`/`BaseHeaderHash`) are all zero, the top-level
+    /// `GameCode` field holds the *base's* game code instead of this file's own, every
+    /// block additionally has <see cref="BlockMode.Verbatim"/> available, and
+    /// <see cref="BlockMode.Dict"/> draws its dictionary from the base `.ndz`'s own
+    /// embedded raw-dict section rather than this file's own (which doesn't exist here).
+    /// </summary>
+    HackContainer = 1u << 6,
+
+    // Bit 7: never set by either reference implementation - reserved/unknown.
 }
 
 /// <summary>

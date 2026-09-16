@@ -214,18 +214,58 @@ shared base, never a chain) with no wire-format changes needed - see
 `docs/ndz-format-spec.md`'s "Pair container format" section and the
 `ndz-spec-provenance` memory for the full design/validation notes.
 
+## 4. Hack container (`.delta.ndz`, flags bits 4+6) — library done, CLI/GUI not started
+
+Reverse-engineered 2026-09-16 (not guessed) from real ndz-studio "Pack hack" output plus
+its own `ndzcore.js` WASM glue - see `docs/ndz-format-spec.md`'s "xdelta-based `.delta.ndz`
+/ hack container" section for the full format. Unlike §1-3 above, `ndztool.py` has no code
+path for this at all, so there was no reference implementation to cross-check against -
+verification instead used real ndz-studio-produced files directly (a real base `.ndz`, a
+real `.delta.ndz`, both real ROMs - saved outside this repo at
+`E:\source\git\NitroTwl\test_files`).
+
+**Library implemented and verified**: `NdzFlags.HackContainer` (bit 6), `BlockMode.Verbatim`
+(mode 7, verbatim-copy-from-an-explicit-base-offset), `Compression.HackContainerWriter`
+(write, a separate type from `NdzWriter` mirroring the `NdzPairWriter` precedent), and
+`Compression.NdzArchive.Open`'s new `baseNdzBytes` parameter (read - extends `NdzArchive` in
+place rather than a new sibling type, since it's the same `NDZ1` envelope). Mode 7's
+exact-match search reuses a promoted `XDelta.HashChainMatcher` (pulled out of
+`VcdiffEncoder`'s own private nested class, zero behavior change there) rather than a new
+index, since real relocated content lands at arbitrary, non-block-aligned offsets a simple
+hash-aligned index would miss. `NdzWriter.CompressBlockCandidates` was extracted from
+`NdzWriter.CompressFrame` so both writers share the Plain/Dict/filter search rather than
+duplicating it - `NdzWriter`'s own full test suite re-passed unchanged after that extraction,
+confirming it's a pure refactor.
+
+Verified both directions against real files, not just synthetic fixtures: our reader
+decodes the real ndz-studio-produced `.delta.ndz` byte-exact (SHA-256-identical) against
+the real White ROM, and our own writer's output round-trips byte-exact against the real
+Black/White ROMs too (not expected to be byte-identical to ndz-studio's own file - its
+candidate-selection heuristics are its own - but correct). See
+`tests/Ndz.Core.Tests/HackContainerTests.cs`, `HashChainMatcherTests.cs`, and
+`HackContainerRealFileTests.cs` (the real-file tests skip cleanly, not via a true xUnit
+skip, when `E:\source\git\NitroTwl\test_files` isn't present - e.g. in CI).
+
+**Not started**: CLI commands (`pack-hack`/`unpack-hack`, or similar - see
+`docs/ndz-format-spec.md`'s plan notes) and GUI wiring (a queued-item flow mirroring
+`RomEntryViewModel.Targets`, on branch `gui/pack-queue-foundation`, which doesn't yet have
+this session's xdelta work merged in). Per explicit direction, these are deliberately
+sequenced after the library was proven correct, not done in the same pass.
+
 ## Suggested build order
 
 1. ~~**Filter modes**~~ - done, see the update note above.
 2. ~~**Base-patch**~~ - done, see the update note above.
 3. ~~**Pair container**~~ - done, see the update note above.
+4. ~~**Hack container library**~~ - done, see §4 above. CLI/GUI wiring still open.
 
-All three items in this plan are now implemented and cross-verified against
-`ndztool.py`. What's left, per `docs/ndz-format-spec.md`'s "Open questions": only the
+All three original items in this plan are implemented and cross-verified against
+`ndztool.py`. What's left there, per `docs/ndz-format-spec.md`'s "Open questions": only the
 retired trained-dictionary flag (bit 2 - confirmed not worth implementing, nothing
 produces it). `patchbench.py` itself was extracted directly into `ndztool.py` by a Claude
 session with real access to it (see `reference/mena-patchbench/README.md`), so it isn't
-treated as a separate missing source anymore.
+treated as a separate missing source anymore. The hack container (§4) is a separate,
+later addition with its own remaining CLI/GUI work.
 
 Each step: implement, unit-test, then cross-check against a real `ndztool.py` run in an
 isolated venv on real byte content (not just synthetic fixtures) in both directions -

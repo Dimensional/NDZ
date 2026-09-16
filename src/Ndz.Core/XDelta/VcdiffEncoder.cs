@@ -25,9 +25,6 @@ public static class VcdiffEncoder
     /// <summary>A repeated-byte run shorter than this is cheaper to leave as literal ADD bytes than to pay a RUN instruction's own overhead.</summary>
     public const int MinRunLength = 4;
 
-    private const int HashBytes = 4;
-    private const int MaxChainSteps = 32;
-
     /// <summary>
     /// Generates a VCDIFF delta from <paramref name="source"/> to <paramref name="target"/>.
     /// Each of the three per-window sections (ADD/RUN data, instructions, addresses) is
@@ -123,7 +120,7 @@ public static class VcdiffEncoder
         while (i < target.Length)
         {
             int matchLength = 0, matchPos = 0;
-            if (source.Length >= HashBytes && i + MinMatchLength <= target.Length)
+            if (source.Length >= HashChainMatcher.HashBytes && i + MinMatchLength <= target.Length)
                 matcher.FindBestMatch(target, i, out matchPos, out matchLength);
 
             if (matchLength >= MinMatchLength)
@@ -194,77 +191,5 @@ public static class VcdiffEncoder
         }
 
         FlushAdd(end);
-    }
-
-    /// <summary>A classic hash-chain greedy match finder (à la zlib's deflate) indexing only <see cref="_source"/> - target positions are never indexed, matching this encoder's source-only match scope.</summary>
-    private sealed class HashChainMatcher
-    {
-        private const int HashBits = 17;
-        private const int HashSize = 1 << HashBits;
-
-        private readonly byte[] _source;
-        private readonly int[] _head;
-        private readonly int[] _prev;
-
-        public HashChainMatcher(byte[] source)
-        {
-            _source = source;
-            _head = new int[HashSize];
-            Array.Fill(_head, -1);
-            _prev = new int[Math.Max(source.Length, 1)];
-
-            if (source.Length >= HashBytes)
-            {
-                for (int i = 0; i <= source.Length - HashBytes; i++)
-                {
-                    uint h = Hash(source, i);
-                    _prev[i] = _head[h];
-                    _head[h] = i;
-                }
-            }
-        }
-
-        public void FindBestMatch(byte[] target, int targetPos, out int bestPos, out int bestLength)
-        {
-            bestPos = 0;
-            bestLength = 0;
-            if (_source.Length < HashBytes || targetPos + HashBytes > target.Length)
-                return;
-
-            int maxPossible = target.Length - targetPos;
-            uint h = Hash(target, targetPos);
-            int candidate = _head[h];
-            int steps = 0;
-
-            while (candidate >= 0 && steps < MaxChainSteps)
-            {
-                int len = MatchLength(candidate, target, targetPos, maxPossible);
-                if (len > bestLength)
-                {
-                    bestLength = len;
-                    bestPos = candidate;
-                    if (len >= maxPossible)
-                        break;
-                }
-                candidate = _prev[candidate];
-                steps++;
-            }
-        }
-
-        private int MatchLength(int sourcePos, byte[] target, int targetPos, int maxPossible)
-        {
-            int len = 0;
-            int srcLen = _source.Length;
-            while (len < maxPossible && sourcePos + len < srcLen && _source[sourcePos + len] == target[targetPos + len])
-                len++;
-            return len;
-        }
-
-        private static uint Hash(byte[] data, int pos)
-        {
-            uint h = (uint)(data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16) | (data[pos + 3] << 24));
-            h *= 2654435761u;
-            return h >> (32 - HashBits);
-        }
     }
 }

@@ -38,12 +38,14 @@ namespace Ndz.Core.Format;
 /// <see cref="Plain"/> (`plain_cctx.compress(fwd(blk))` in `ndztool.py`), just fed
 /// filtered bytes; there is no separate codec to cross-check.
 ///
-/// All 7 modes are implemented on both sides (see <see cref="Format.BlockFilters"/> for
-/// the transforms, <see cref="Compression.NdzWriter"/> for encode-side selection, and
-/// <see cref="Compression.NdzArchive"/> for decode) and cross-verified bidirectionally
-/// against real `ndztool.py` output. <see cref="Compression.NdzArchive"/> still fails
-/// loudly on any raw mode byte outside 0-6, rather than assuming an unrecognized value
-/// behaves like an existing mode.
+/// All 7 of these modes (0-6) are implemented on both sides (see
+/// <see cref="Format.BlockFilters"/> for the transforms, <see cref="Compression.NdzWriter"/>
+/// for encode-side selection, and <see cref="Compression.NdzArchive"/> for decode) and
+/// cross-verified bidirectionally against real `ndztool.py` output.
+/// <see cref="Compression.NdzArchive"/> fails loudly on any raw mode byte outside 0-7,
+/// rather than assuming an unrecognized value behaves like an existing mode - see
+/// <see cref="Verbatim"/> (7) for the one additional, hack-container-only mode value,
+/// which `ndztool.py` has no knowledge of at all.
 /// </summary>
 public enum BlockMode : byte
 {
@@ -54,4 +56,15 @@ public enum BlockMode : byte
     Delta4 = 4,
     Shuffle2 = 5,
     Shuffle4 = 6,
+
+    /// <summary>
+    /// Mode 7 - only valid in an <see cref="NdzFlags.HackContainer"/> file. The block's
+    /// "compressed data" slot is a literal 4-byte little-endian offset into the base ROM;
+    /// the block is exactly the file's block-size bytes copied verbatim from that offset
+    /// - no zstd involved at all. Not necessarily the block's own aligned position -
+    /// confirmed real, non-block-aligned content relocation in a real sample. Reverse-
+    /// engineered 2026-09-16 - see docs/ndz-format-spec.md's "xdelta-based `.delta.ndz` /
+    /// hack container" section.
+    /// </summary>
+    Verbatim = 7,
 }
