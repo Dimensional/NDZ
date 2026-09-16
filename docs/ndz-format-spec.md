@@ -632,8 +632,8 @@ genuine ndz-studio-produced `.delta.ndz` byte-exact against the real White ROM, 
 writer's output round-trips byte-exact against the real Black/White ROMs too (not expected to
 be byte-identical to ndz-studio's own file - its candidate-selection heuristics are its own -
 but correct). See `tests/Ndz.Core.Tests/HackContainerTests.cs` and
-`HackContainerRealFileTests.cs`. Not yet wired into the CLI or GUI - see
-`docs/ndz-remaining-work.md`.
+`HackContainerRealFileTests.cs`. Wired into the CLI too (`ndz pack-hack`, `--base-ndz` on
+`decompress`/`verify`) - see `docs/ndz-remaining-work.md`. Not yet wired into the GUI.
 
 ## Reference materials
 

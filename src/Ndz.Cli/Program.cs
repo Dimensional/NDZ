@@ -31,6 +31,8 @@ static int Run(string[] args)
                 return RunPatchApply(args[1..]);
             case "patch-make":
                 return RunPatchMake(args[1..]);
+            case "pack-hack":
+                return RunPackHack(args[1..]);
             case "-h":
             case "--help":
             case "help":
@@ -192,18 +194,27 @@ static void PrintUsage()
                                                              let --block-size auto --raw-dict auto on the real
                                                              `compress --pair-out` decide for you - this
                                                              command is for previewing that choice first.
-          ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]
+          ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--base-ndz <base.ndz>] [--index N]
                                                              Reconstruct the original .nds. --base is
-                                                             required if the file used base-patch mode
-                                                             (not for a pair container, which carries its
-                                                             own base). --index picks which ROM to extract
-                                                             from a pair container (default: the
-                                                             self-contained one).
+                                                             required if the file used ordinary base-patch
+                                                             mode (windowed dictionary against a raw base
+                                                             .nds); --base-ndz is required instead if it's
+                                                             a hack container (ndz-studio's "Pack hack" -
+                                                             see `pack-hack` below) - it needs the base's
+                                                             own ALREADY-PACKED .ndz, not a raw .nds, since
+                                                             it draws that base's own raw-dict section and
+                                                             decompressed bytes from it. Neither is needed
+                                                             for a pair container, which carries its own
+                                                             base. --index picks which ROM to extract from
+                                                             a pair container (default: the self-contained
+                                                             one).
           ndz info <in.ndz>                                 Print front-matter and seek-table summary, or
                                                              (for a pair container) both entries' summaries.
-          ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--index N]
+                                                             Never needs a base, hack containers included.
+          ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--base-ndz <base.ndz>] [--index N]
                                                              Decompress and byte-compare against the
-                                                             original .nds.
+                                                             original .nds. See `decompress` above for
+                                                             --base vs. --base-ndz.
           ndz patch-apply <base.nds> <patch.xdelta> <out.nds>
                                                              Apply an xdelta3/VCDIFF patch (RFC 3284)
                                                              against a base ROM to reconstruct a target -
@@ -211,17 +222,56 @@ static void PrintUsage()
                                                              or a ROM hack against a vanilla dump. This is
                                                              the PC-side step ndz-studio's own site
                                                              describes ahead of packing the result as a
-                                                             normal `compress --base` .ndz.
+                                                             hack container (see `pack-hack` below).
           ndz patch-make <base.nds> <target.nds> <out.xdelta>
                                                              Generate an xdelta3/VCDIFF patch describing
                                                              how to turn <base.nds> into <target.nds>.
+          ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz> (--target <target.nds> | --patch <patch.xdelta>)
+                                     [--build-base] [--raw-dict <size>|auto] [--level 1-19]
+                                     [--block-size N|auto] [--max-dict <size>] [--no-filters]
+                                                             Packs a ROM hack or version diff cheaply
+                                                             against a base - ndz-studio's "Pack hack"
+                                                             feature, reverse-engineered 2026-09-16 (see
+                                                             docs/ndz-format-spec.md's "xdelta-based
+                                                             `.delta.ndz` / hack container" section) since
+                                                             no spec exists from the format author. <base.ndz>
+                                                             must be that exact base already packed via
+                                                             `ndz compress` - its own raw-dict section (if
+                                                             any) and game code become part of this file.
+                                                             Give either --target (the full patched ROM
+                                                             directly) or --patch (an existing standalone
+                                                             .xdelta - applied internally first, same as
+                                                             `patch-apply`, then packed the same way).
+                                                             xdelta/VCDIFF itself is never stored in the
+                                                             output - only used, if given, to reconstruct
+                                                             the target ROM before packing. Unlike
+                                                             ndz-studio's own output, this port's block-
+                                                             matching isn't guaranteed byte-identical to
+                                                             ndz-studio's - it round-trips correctly, but by
+                                                             its own candidate-selection heuristics, not a
+                                                             reverse-engineered copy of theirs. To decode the
+                                                             result, use `decompress --base-ndz <base.ndz>`.
+                                                             --build-base packs <base.nds> into <base.ndz>
+                                                             first, in this same invocation, for the common
+                                                             case of not having the base already packed -
+                                                             one command produces both files. --raw-dict,
+                                                             --level, --block-size, and --max-dict apply to
+                                                             THAT base-packing step (same meaning as on
+                                                             `compress` - --raw-dict/--block-size accept
+                                                             'auto' the same way too) and are only valid
+                                                             alongside --build-base; --level and --block-size
+                                                             (once resolved) also apply to the hack-packing
+                                                             step itself - without --build-base, <base.ndz>
+                                                             must already exist and only --level/--block-size/
+                                                             --no-filters (for the hack step alone) apply.
 
         Notes:
           - ROMs should be decrypted first; NDZ compresses raw bytes as-is.
           - The five byte-transform filter modes, raw-dictionary mode, base-ROM patch
-            mode, and the pair-container format are all fully implemented, both
-            directions - decompress correctly reads real files from the reference
-            tooling using any of them.
+            mode, the pair-container format, and the hack container are all fully
+            implemented, both directions - decompress correctly reads real files from
+            the reference tooling (or, for the hack container, real ndz-studio output)
+            using any of them.
         """);
 }
 
@@ -832,9 +882,9 @@ static bool VerifyPairRoundTrip(string pairOutPath, string basePath, IReadOnlyLi
 
 static int RunDecompress(string[] args)
 {
-    if (!TryParsePositionalsWithBaseAndIndex(args, 2, out var positionals, out string? basePath, out int? index, out string? error))
+    if (!TryParsePositionalsWithBaseAndIndex(args, 2, out var positionals, out string? basePath, out string? baseNdzPath, out int? index, out string? error))
     {
-        Console.Error.WriteLine(error ?? "Usage: ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--index N]");
+        Console.Error.WriteLine(error ?? "Usage: ndz decompress <in.ndz> <out.nds> [--base <base.nds>] [--base-ndz <base.ndz>] [--index N]");
         return 1;
     }
 
@@ -848,7 +898,10 @@ static int RunDecompress(string[] args)
     }
     else
     {
-        using var archive = NdzArchive.Open(bytes, basePath == null ? null : File.ReadAllBytes(basePath));
+        using var archive = NdzArchive.Open(
+            bytes,
+            basePath == null ? null : File.ReadAllBytes(basePath),
+            baseNdzPath == null ? null : File.ReadAllBytes(baseNdzPath));
         rom = archive.DecompressAll();
     }
     File.WriteAllBytes(positionals[1], rom);
@@ -857,11 +910,12 @@ static int RunDecompress(string[] args)
     return 0;
 }
 
-/// <summary>Parses `expectedPositionals` bare arguments plus optional `--base <path>`/`--index N`, in any order - shared by decompress/verify.</summary>
-static bool TryParsePositionalsWithBaseAndIndex(string[] args, int expectedPositionals, out List<string> positionals, out string? basePath, out int? index, out string? error)
+/// <summary>Parses `expectedPositionals` bare arguments plus optional `--base <path>`/`--base-ndz <path>`/`--index N`, in any order - shared by decompress/verify. `--base` (a raw .nds) is for ordinary base-patch mode; `--base-ndz` (an already-packed .ndz) is for a hack container instead - see <see cref="NdzArchive.Open"/>'s remarks on why they're different shapes.</summary>
+static bool TryParsePositionalsWithBaseAndIndex(string[] args, int expectedPositionals, out List<string> positionals, out string? basePath, out string? baseNdzPath, out int? index, out string? error)
 {
     positionals = new List<string>();
     basePath = null;
+    baseNdzPath = null;
     index = null;
     error = null;
 
@@ -875,6 +929,15 @@ static bool TryParsePositionalsWithBaseAndIndex(string[] args, int expectedPosit
                 return false;
             }
             basePath = args[i];
+        }
+        else if (args[i] == "--base-ndz")
+        {
+            if (++i >= args.Length)
+            {
+                error = "--base-ndz requires a file path.";
+                return false;
+            }
+            baseNdzPath = args[i];
         }
         else if (args[i] == "--index")
         {
@@ -935,10 +998,16 @@ static int RunInfo(string[] args)
 
     long compressedTotal = seekTable.Sum(e => (long)e.CompressedSize);
 
-    var namedFlags = new[] { NdzFlags.V2, NdzFlags.ZStd, NdzFlags.Filters, NdzFlags.BasePatch, NdzFlags.RawDictionary }
+    var namedFlags = new[] { NdzFlags.V2, NdzFlags.ZStd, NdzFlags.Filters, NdzFlags.BasePatch, NdzFlags.RawDictionary, NdzFlags.HackContainer }
         .Where(f => frontMatter.Flags.HasFlag(f));
+    bool isHackContainer = frontMatter.Flags.HasFlag(NdzFlags.HackContainer);
 
-    Console.WriteLine($"Game code:          0x{frontMatter.GameCode:X8}");
+    // A hack container repurposes the top-level GameCode field to hold the BASE's game
+    // code (so a reader knows which base .ndz this hack attaches to), not this file's
+    // own reconstructed content's code - see NdzFlags.HackContainer's remarks.
+    Console.WriteLine(isHackContainer
+        ? $"Base game code:     0x{frontMatter.GameCode:X8} (hack container - see --base-ndz)"
+        : $"Game code:          0x{frontMatter.GameCode:X8}");
     Console.WriteLine($"Original size:      {frontMatter.OriginalSize:N0} bytes");
     Console.WriteLine($"Compressed payload: {compressedTotal:N0} bytes");
     // Frame size isn't a fixed format-wide value (see NdzConstants.FrameSize's remarks) -
@@ -948,8 +1017,11 @@ static int RunInfo(string[] args)
     Console.WriteLine($"Frames:             {seekTable.Count:N0} ({typicalFrameSize:N0} bytes each, last frame may be shorter)");
     Console.WriteLine($"Block size:         {frontMatter.Flags.GetBlockSize():N0} bytes (from flags)");
     Console.WriteLine($"Flags:              0x{(uint)frontMatter.Flags:X8} [{string.Join(", ", namedFlags)}]");
-    Console.WriteLine($"Dictionary:         {(frontMatter.HasDictionary ? $"{frontMatter.DictionaryDecompressedSize:N0} bytes (decompressed)" : "none")}");
-    if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch))
+    if (isHackContainer)
+        Console.WriteLine("Dictionary:         drawn from the base .ndz's own raw-dict section, if any (see --base-ndz)");
+    else
+        Console.WriteLine($"Dictionary:         {(frontMatter.HasDictionary ? $"{frontMatter.DictionaryDecompressedSize:N0} bytes (decompressed)" : "none")}");
+    if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch) && !isHackContainer)
         Console.WriteLine($"Base ROM:           0x{frontMatter.BaseGameCode:X8}, {frontMatter.BaseOriginalSize:N0} bytes (needed to decompress)");
     return 0;
 }
@@ -991,11 +1063,198 @@ static int RunPatchMake(string[] args)
     return 0;
 }
 
+/// <summary>
+/// Packs a ROM hack or version diff cheaply against a base - ndz-studio's "Pack hack"
+/// feature (see docs/ndz-format-spec.md's "xdelta-based `.delta.ndz` / hack container"
+/// section). Give either --target (the full patched ROM) or --patch (an existing
+/// standalone .xdelta, applied internally first via <see cref="XDeltaCodec.Apply"/>) -
+/// never both. --build-base packs &lt;base.nds&gt; into &lt;base.ndz&gt; first (in the same
+/// invocation, reusing `compress`'s own --raw-dict/--level/--block-size/--max-dict
+/// semantics), for the common case of not having the base already packed - without it,
+/// &lt;base.ndz&gt; must already exist.
+/// </summary>
+static int RunPackHack(string[] args)
+{
+    var positionals = new List<string>();
+    string? targetPath = null, patchPath = null;
+    bool buildBase = false;
+    string? rawDictArg = null;
+    int level = 19;
+    string? blockSizeArg = null;
+    bool enableFilters = true;
+    int maxDictSize = DictionaryAnalyzer.DefaultMaxDictionarySize;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        if (args[i] == "--target")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--target requires a file path.");
+                return 1;
+            }
+            targetPath = args[i];
+        }
+        else if (args[i] == "--patch")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--patch requires a file path.");
+                return 1;
+            }
+            patchPath = args[i];
+        }
+        else if (args[i] == "--build-base")
+        {
+            buildBase = true;
+        }
+        else if (args[i] == "--raw-dict")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
+                return 1;
+            }
+            rawDictArg = args[i];
+        }
+        else if (args[i] == "--level")
+        {
+            if (++i >= args.Length || !int.TryParse(args[i], out level))
+            {
+                Console.Error.WriteLine($"--level requires an integer value (1-{NdzConstants.MaxLevel}).");
+                return 1;
+            }
+        }
+        else if (args[i] == "--block-size")
+        {
+            if (++i >= args.Length)
+            {
+                Console.Error.WriteLine($"--block-size requires a value: {FormatBlockSizeChoices()}, or 'auto'.");
+                return 1;
+            }
+            blockSizeArg = args[i];
+        }
+        else if (args[i] == "--max-dict")
+        {
+            if (++i >= args.Length || !TryParseSize(args[i], out maxDictSize))
+            {
+                Console.Error.WriteLine("--max-dict requires a size, e.g. 8m.");
+                return 1;
+            }
+        }
+        else if (args[i] == "--no-filters")
+        {
+            enableFilters = false;
+        }
+        else positionals.Add(args[i]);
+    }
+
+    if (positionals.Count != 3 || (targetPath == null) == (patchPath == null))
+    {
+        Console.Error.WriteLine("Usage: ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz> (--target <target.nds> | --patch <patch.xdelta>)");
+        Console.Error.WriteLine("                     [--build-base] [--raw-dict <size>|auto] [--level 1-19] [--block-size N|auto] [--no-filters]");
+        Console.Error.WriteLine("(exactly one of --target/--patch is required)");
+        return 1;
+    }
+    if (!buildBase && (rawDictArg != null || string.Equals(blockSizeArg, "auto", StringComparison.OrdinalIgnoreCase)))
+    {
+        Console.Error.WriteLine("--raw-dict and --block-size auto only apply together with --build-base - there's nothing to (re-)analyze or derive a dictionary from for an already-packed base.");
+        return 1;
+    }
+    if (level < 1 || level > NdzConstants.MaxLevel)
+    {
+        Console.Error.WriteLine($"--level must be between 1 and {NdzConstants.MaxLevel} (higher levels decompress too slowly for the target hardware).");
+        return 1;
+    }
+
+    string baseNdsPath = positionals[0], baseNdzPath = positionals[1], outPath = positionals[2];
+    byte[] baseRom = File.ReadAllBytes(baseNdsPath);
+
+    int blockSize = NdzConstants.BlockSize;
+    bool blockSizeAuto = false;
+    if (blockSizeArg != null)
+    {
+        if (string.Equals(blockSizeArg, "auto", StringComparison.OrdinalIgnoreCase))
+            blockSizeAuto = true;
+        else if (!int.TryParse(blockSizeArg, out blockSize) || !NdzConstants.SupportedBlockSizes.Contains(blockSize))
+        {
+            Console.Error.WriteLine($"--block-size must be one of {FormatBlockSizeChoices()}, or 'auto'.");
+            return 1;
+        }
+    }
+
+    byte[] baseNdzBytes;
+    if (buildBase)
+    {
+        int rawDictionarySize = 0;
+        bool rawDictAuto = false;
+        if (rawDictArg != null)
+        {
+            if (string.Equals(rawDictArg, "auto", StringComparison.OrdinalIgnoreCase))
+                rawDictAuto = true;
+            else if (!TryParseSize(rawDictArg, out rawDictionarySize))
+            {
+                Console.Error.WriteLine("--raw-dict requires a size (e.g. 8m or 512k) or 'auto'.");
+                return 1;
+            }
+        }
+
+        if (blockSizeAuto)
+        {
+            var blockSizeResult = BlockSizeAnalyzer.Analyze(baseRom, null, maxDictionarySize: maxDictSize, level: (CompressionType)level);
+            blockSize = blockSizeResult.RecommendedBlockSize;
+            if (rawDictAuto)
+                rawDictionarySize = blockSizeResult.RecommendedDictionarySize;
+            Console.WriteLine($"--block-size auto: recommended {FormatSize(blockSize)}.");
+        }
+        else if (rawDictAuto)
+        {
+            var analysis = DictionaryAnalyzer.Analyze(baseRom, null, maxDictSize, (CompressionType)level, blockSize);
+            rawDictionarySize = analysis.RecommendedDictionarySize;
+            Console.WriteLine($"--raw-dict auto: recommended {FormatSize(rawDictionarySize)} (cap {FormatSize(maxDictSize)}).");
+        }
+
+        Console.WriteLine($"Building base '{baseNdzPath}' from '{baseNdsPath}'...");
+        NdzWriter.CompressFile(baseNdsPath, baseNdzPath, (CompressionType)level, blockSize, enableFilters, rawDictionarySize: rawDictionarySize);
+        long baseCompressedSize = new FileInfo(baseNdzPath).Length;
+        double baseRatio = baseRom.Length == 0 ? 0 : (double)baseCompressedSize / baseRom.Length;
+        Console.WriteLine($"Wrote '{baseNdzPath}': {baseRom.Length:N0} -> {baseCompressedSize:N0} bytes ({baseRatio:P1}).");
+        baseNdzBytes = File.ReadAllBytes(baseNdzPath);
+    }
+    else
+    {
+        baseNdzBytes = File.ReadAllBytes(baseNdzPath);
+    }
+
+    using (var output = File.Create(outPath))
+    {
+        if (targetPath != null)
+        {
+            byte[] targetRom = File.ReadAllBytes(targetPath);
+            HackContainerWriter.Compress(targetRom, baseRom, baseNdzBytes, output, (CompressionType)level, blockSize, enableFilters);
+        }
+        else
+        {
+            byte[] patch = File.ReadAllBytes(patchPath!);
+            HackContainerWriter.CompressFromPatch(baseRom, patch, baseNdzBytes, output, (CompressionType)level, blockSize, enableFilters);
+        }
+    }
+
+    // Report the real OriginalSize NdzWriter wrote back out of the file itself, rather
+    // than re-deriving it from whichever input path was given (--patch's target size
+    // isn't otherwise known without decoding it) - one code path either way.
+    var (frontMatter, _) = NdzArchive.ReadInfo(File.ReadAllBytes(outPath));
+    long compressedSize = new FileInfo(outPath).Length;
+    double ratio = frontMatter.OriginalSize == 0 ? 0 : (double)compressedSize / frontMatter.OriginalSize;
+    Console.WriteLine($"Wrote '{outPath}': {frontMatter.OriginalSize:N0} -> {compressedSize:N0} bytes ({ratio:P1}).");
+    return 0;
+}
+
 static int RunVerify(string[] args)
 {
-    if (!TryParsePositionalsWithBaseAndIndex(args, 2, out var positionals, out string? basePath, out int? index, out string? error))
+    if (!TryParsePositionalsWithBaseAndIndex(args, 2, out var positionals, out string? basePath, out string? baseNdzPath, out int? index, out string? error))
     {
-        Console.Error.WriteLine(error ?? "Usage: ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--index N]");
+        Console.Error.WriteLine(error ?? "Usage: ndz verify <in.ndz> <in.nds> [--base <base.nds>] [--base-ndz <base.ndz>] [--index N]");
         return 1;
     }
 
@@ -1007,7 +1266,10 @@ static int RunVerify(string[] args)
     }
     else
     {
-        using var archive = NdzArchive.Open(bytes, basePath == null ? null : File.ReadAllBytes(basePath));
+        using var archive = NdzArchive.Open(
+            bytes,
+            basePath == null ? null : File.ReadAllBytes(basePath),
+            baseNdzPath == null ? null : File.ReadAllBytes(baseNdzPath));
         rebuilt = archive.DecompressAll();
     }
     byte[] original = File.ReadAllBytes(positionals[1]);

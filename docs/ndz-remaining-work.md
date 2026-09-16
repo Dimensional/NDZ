@@ -246,11 +246,17 @@ candidate-selection heuristics are its own - but correct). See
 `HackContainerRealFileTests.cs` (the real-file tests skip cleanly, not via a true xUnit
 skip, when `E:\source\git\NitroTwl\test_files` isn't present - e.g. in CI).
 
-**Not started**: CLI commands (`pack-hack`/`unpack-hack`, or similar - see
-`docs/ndz-format-spec.md`'s plan notes) and GUI wiring (a queued-item flow mirroring
-`RomEntryViewModel.Targets`, on branch `gui/pack-queue-foundation`, which doesn't yet have
-this session's xdelta work merged in). Per explicit direction, these are deliberately
-sequenced after the library was proven correct, not done in the same pass.
+**CLI done too**: `ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz> (--target <target.nds>
+| --patch <patch.xdelta>)`, plus `--build-base` (packs `<base.nds>` into `<base.ndz>` in the
+same invocation, with `compress`-equivalent `--raw-dict`/`--level`/`--block-size`/
+`--max-dict` options, `auto` included) for the common case of not having the base already
+packed. `decompress`/`verify` gained `--base-ndz <path>` (distinct from `--base <path>`,
+which is for ordinary base-patch mode's raw `.nds` instead). Verified end-to-end against the
+real Black/White ROMs via the CLI itself, both with a pre-existing base `.ndz` and with
+`--build-base` building it fresh in the same command.
+
+**Not started**: GUI wiring (a queued-item flow mirroring `RomEntryViewModel.Targets` - the
+GUI is already merged into this branch, so no separate branch reconciliation is needed).
 
 ## Suggested build order
 
