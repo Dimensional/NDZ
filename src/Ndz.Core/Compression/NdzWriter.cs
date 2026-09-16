@@ -339,6 +339,7 @@ public static class NdzWriter
         CompressionResultCode plainResult = plainBlock.Compress(rom, blockOffset, blockLength, bestDstBuffer, 0, ref bestCount);
         if (plainResult != CompressionResultCode.Success)
             throw new InvalidDataException($"ZStd compression failed on frame {frameIndex} block {blockIndex}: {plainResult}");
+        bestCount = TrimZstdFrameHeader(bestDstBuffer, bestCount, blockLength);
         BlockMode mode = BlockMode.Plain;
 
         if (dictBlock != null)
@@ -347,6 +348,7 @@ public static class NdzWriter
             CompressionResultCode dictResult = dictBlock.Compress(rom, blockOffset, blockLength, candidateDstBuffer, 0, ref candidateCount);
             if (dictResult != CompressionResultCode.Success)
                 throw new InvalidDataException($"ZStd dictionary compression failed on frame {frameIndex} block {blockIndex}: {dictResult}");
+            candidateCount = TrimZstdFrameHeader(candidateDstBuffer, candidateCount, blockLength);
 
             if (candidateCount < bestCount)
             {
@@ -381,6 +383,56 @@ public static class NdzWriter
         }
 
         return mode;
+    }
+
+    private const uint ZstdMagicNumber = 0xFD2FB528;
+
+    /// <summary>
+    /// Shrinks a GrindCore-produced zstd frame's header by 1 byte where possible.
+    /// GrindCore's simple compress call always pledges the source size up front, which
+    /// zstd encodes as <c>Single_Segment_flag</c> set plus an explicit 2-byte
+    /// Frame_Content_Size field (7-byte header total: 4-byte magic + 1-byte descriptor +
+    /// 2-byte size) - GrindCore exposes no public option to turn this off. The real
+    /// ndz-studio packer's own zstd encoder isn't told a pledged size, so it instead emits
+    /// a 1-byte Window_Descriptor (6-byte header total) - functionally equivalent (any
+    /// conformant decoder accepts either shape) and 1 byte smaller per compressed block.
+    /// Confirmed empirically (2026-09-17) uniform across every zstd-based mode (Plain,
+    /// Dict, every filter) in both our output and a real ndz-studio file - see
+    /// docs/ndz-format-spec.md's zstd-header-overhead note.
+    ///
+    /// Our own container format already tracks each block's decompressed size externally
+    /// (from <c>blockSize</c>/the frame's own accounting), so the embedded content size
+    /// was never actually read by anything - safe to drop. Only rewrites the exact header
+    /// shape GrindCore is known to emit (no dictionary ID, no checksum, single segment,
+    /// 2-byte content size); anything else is left untouched rather than guessed at.
+    /// </summary>
+    internal static int TrimZstdFrameHeader(byte[] buffer, int count, int contentLength)
+    {
+        if (count < 7 || BinaryPrimitives.ReadUInt32LittleEndian(buffer) != ZstdMagicNumber)
+            return count;
+
+        byte fhd = buffer[4];
+        int dictIdFlag = fhd & 0x3;
+        bool checksumFlag = (fhd & 0x4) != 0;
+        bool singleSegment = (fhd & 0x20) != 0;
+        int fcsFieldFlag = (fhd >> 6) & 0x3;
+
+        if (dictIdFlag != 0 || checksumFlag || !singleSegment || fcsFieldFlag != 1)
+            return count; // not GrindCore's known shape - leave untouched rather than guess.
+
+        // Window_Descriptor's Exponent (bits 3-7): smallest value whose window
+        // (1 << (10 + Exponent)) covers this block's actual content length - the encoder
+        // never needed a back-reference further than that, so this is always a safe (and
+        // exact, not just conservative) declared window for this specific block.
+        int exponent = 0;
+        while (exponent < 21 && (1 << (10 + exponent)) < contentLength)
+            exponent++;
+        byte windowDescriptor = (byte)(exponent << 3);
+
+        buffer[4] = 0x00; // FHD: no dictionary ID, no checksum, not single-segment, content size unknown.
+        buffer[5] = windowDescriptor;
+        Array.Copy(buffer, 7, buffer, 6, count - 7);
+        return count - 1;
     }
 
     /// <summary>
@@ -468,6 +520,7 @@ public static class NdzWriter
                     CompressionResultCode windowResult = candidateBlock.Compress(rom, blockOffset, blockLength, candidateDstBuffer, 0, ref windowCount);
                     if (windowResult != CompressionResultCode.Success)
                         throw new InvalidDataException($"ZStd base-window compression failed on frame {frameIndex} block {b} (offset 0x{windowOffset:X}): {windowResult}");
+                    windowCount = TrimZstdFrameHeader(candidateDstBuffer, windowCount, blockLength);
 
                     if (windowCount < bestCount)
                     {
@@ -510,6 +563,7 @@ public static class NdzWriter
         CompressionResultCode result = plainBlock.Compress(filterSrcBuffer, 0, blockLength, candidateDstBuffer, 0, ref candidateCount);
         if (result != CompressionResultCode.Success)
             throw new InvalidDataException($"ZStd filter compression failed on frame {frameIndex} block {blockIndex} ({filterMode}): {result}");
+        candidateCount = TrimZstdFrameHeader(candidateDstBuffer, candidateCount, blockLength);
 
         if (candidateCount < bestCount)
         {

@@ -228,23 +228,46 @@ real `.delta.ndz`, both real ROMs - saved outside this repo at
 (mode 7, verbatim-copy-from-an-explicit-base-offset), `Compression.HackContainerWriter`
 (write, a separate type from `NdzWriter` mirroring the `NdzPairWriter` precedent), and
 `Compression.NdzArchive.Open`'s new `baseNdzBytes` parameter (read - extends `NdzArchive` in
-place rather than a new sibling type, since it's the same `NDZ1` envelope). Mode 7's
-exact-match search reuses a promoted `XDelta.HashChainMatcher` (pulled out of
-`VcdiffEncoder`'s own private nested class, zero behavior change there) rather than a new
-index, since real relocated content lands at arbitrary, non-block-aligned offsets a simple
-hash-aligned index would miss. `NdzWriter.CompressBlockCandidates` was extracted from
-`NdzWriter.CompressFrame` so both writers share the Plain/Dict/filter search rather than
-duplicating it - `NdzWriter`'s own full test suite re-passed unchanged after that extraction,
-confirming it's a pure refactor.
+place rather than a new sibling type, since it's the same `NDZ1` envelope).
+`NdzWriter.CompressBlockCandidates` was extracted from `NdzWriter.CompressFrame` so both
+writers share the Plain/Dict/filter search rather than duplicating it - `NdzWriter`'s own
+full test suite re-passed unchanged after that extraction, confirming it's a pure refactor.
+
+Mode 7's exact-match search first reused a promoted `XDelta.HashChainMatcher` (pulled out of
+`VcdiffEncoder`'s own private nested class) - functionally correct but far short of real
+ndz-studio's own ratio on a full 256 MB ROM (a fixed-position hash search spends its budget
+on unrelated data before reaching genuine matches). Fetching the real `ndzcore_bg.wasm` from
+ndz-studio's own site and reading its unstripped Rust symbols showed the real packer uses
+content-defined chunking instead (`ndzcore::census::cdc_chunks`, the same gear-hash algorithm
+as `reference/mena-patchbench/ndztool.py`'s own retired `_cdc_chunks`) - so
+`Compression.ContentDefinedChunker` + `Compression.ChunkRunMatcher` now do the primary
+search (chunk both ROMs, index the base's chunks by content hash, stitch matched runs),
+with `HashChainMatcher` kept as a fallback for whatever the chunk boundaries miss. See
+`docs/ndz-format-spec.md`'s "Mode-7 search, corrected same day" note for the full story and
+the real-sample numbers (3.23 MB vs. ndz-studio's 3.15 MB, up from an initial 38 MB).
 
 Verified both directions against real files, not just synthetic fixtures: our reader
 decodes the real ndz-studio-produced `.delta.ndz` byte-exact (SHA-256-identical) against
 the real White ROM, and our own writer's output round-trips byte-exact against the real
 Black/White ROMs too (not expected to be byte-identical to ndz-studio's own file - its
-candidate-selection heuristics are its own - but correct). See
-`tests/Ndz.Core.Tests/HackContainerTests.cs`, `HashChainMatcherTests.cs`, and
-`HackContainerRealFileTests.cs` (the real-file tests skip cleanly, not via a true xUnit
-skip, when `E:\source\git\NitroTwl\test_files` isn't present - e.g. in CI).
+candidate-selection heuristics are its own - but correct, and now close in size too). See
+`tests/Ndz.Core.Tests/HackContainerTests.cs`, `HashChainMatcherTests.cs`,
+`ContentDefinedChunkerTests.cs`, `ChunkRunMatcherTests.cs`, and `HackContainerRealFileTests.cs`
+(the real-file tests skip cleanly, not via a true xUnit skip, when
+`E:\source\git\NitroTwl\test_files` isn't present - e.g. in CI). Independently confirmed on a
+second real pair (Mega Man Star Force Dragon/Leo, 32 MB) added to the same fixture set.
+
+**Two follow-on size optimizations, 2026-09-17** (see `docs/ndz-format-spec.md` for full
+detail): (1) `NdzWriter.TrimZstdFrameHeader` shaves a real, deterministic 1-byte-per-block
+zstd header overhead GrindCore has no public option to disable - applies project-wide
+(ordinary `.ndz`/pair containers too, not just hack containers) since it's wired into the
+shared `CompressBlockCandidates`/`TryFilterCandidate`; (2) `HackContainerWriter.SelectBestChunkMatcher`
+auto-picks content-defined chunking's average chunk size per-ROM (tries several candidates,
+keeps whichever resolves the most blocks) rather than a single fixed ~4 KiB default - never
+serialized to disk, so no CLI flag needed. Combined real-world effect: Black/White dropped
+from 3,231,906 to 3,180,697 bytes (was 38 MB before the original CDC fix), now only 43
+Verbatim blocks short of ndz-studio's own 32,355/32,768; Dragon/Leo now *beats* ndz-studio's
+own file by 6 bytes (957,081 vs. 957,087).
 
 **CLI done too**: `ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz> (--target <target.nds>
 | --patch <patch.xdelta>)`, plus `--build-base` (packs `<base.nds>` into `<base.ndz>` in the

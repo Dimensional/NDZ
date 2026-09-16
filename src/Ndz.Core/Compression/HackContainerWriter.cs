@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Linq;
 using Nanook.GrindCore;
 using Nanook.GrindCore.ZStd;
 using Ndz.Core.Format;
@@ -33,9 +34,23 @@ public static class HackContainerWriter
     /// Deliberately deeper than <see cref="HashChainMatcher.DefaultMaxChainSteps"/> (tuned
     /// for <see cref="VcdiffEncoder"/>'s own greedy partial-match scanning): a full-length
     /// exact match is a stricter, rarer condition, worth searching harder for since a hit
-    /// costs only 4 bytes on disk versus a full zstd candidate.
+    /// costs only 4 bytes on disk versus a full zstd candidate. Paired with
+    /// <see cref="HashChainMatcher.RecommendedHashBits"/> below - a wide-enough hash table
+    /// keeps real chains near this length even for a 256 MB ROM; without it, a 256 MB
+    /// source overwhelms the default 131,072-bucket table with unrelated 4-byte prefix
+    /// collisions and this cap gives up long before reaching genuine matches (observed:
+    /// real Pokémon White packed against Black landed at 38 MB instead of ndz-studio's
+    /// ~3 MB before this fix, because most blocks fell back to zstd instead of a 4-byte
+    /// Verbatim pointer).
     /// </summary>
-    private const int ExactMatchChainSteps = 512;
+    private const int ExactMatchChainSteps = 65536;
+
+    /// <summary>
+    /// How many leading bytes of a block feed <see cref="HashChainMatcher"/>'s hash for
+    /// mode-7 search - see its constructor's own remarks on why 4 (right for VCDIFF's
+    /// small-source greedy matching) is far too narrow once the source is a full ROM.
+    /// </summary>
+    private const int ExactMatchKeyBytes = 16;
 
     /// <param name="targetRom">The full ROM this container reconstructs (already-decrypted .nds bytes) - e.g. a ROM hack, or another version of the same game.</param>
     /// <param name="baseRom">The base ROM <paramref name="targetRom"/> is packed against - used for <see cref="BlockMode.Verbatim"/>'s exact-match search. Never stored in the output; must be supplied again at decode time (as its own packed <paramref name="baseNdzBytes"/> - see <see cref="NdzArchive.Open"/>'s <c>baseNdzBytes</c> parameter).</param>
@@ -113,10 +128,13 @@ public static class HackContainerWriter
         frontMatter.WriteTo(frontMatterBytes);
         output.Write(frontMatterBytes);
 
-        // One matcher over the whole base ROM, built once and reused for every block's
-        // Verbatim search - the expensive one-time cost (O(baseRom.Length)), same model as
-        // NdzWriter's own per-Compress-call BaseRomIndex.
-        var matcher = new HashChainMatcher(baseRom, ExactMatchChainSteps);
+        // Two matchers, tried in order per block - see CompressHackFrame's remarks. Both
+        // are built once per Compress call and reused for every block's Verbatim search
+        // (the expensive one-time cost is O(baseRom.Length) either way, same model as
+        // NdzWriter's own per-Compress-call BaseRomIndex).
+        int hashBits = HashChainMatcher.RecommendedHashBits(baseRom.Length);
+        var matcher = new HashChainMatcher(baseRom, ExactMatchChainSteps, hashBits, ExactMatchKeyBytes);
+        var chunkMatcher = SelectBestChunkMatcher(baseRom, targetRom, matcher, blockSize, maxDegreeOfParallelism);
 
         int frameCount = targetRom.Length == 0 ? 0 : (targetRom.Length + frameSize - 1) / frameSize;
         var frames = new byte[frameCount][];
@@ -140,7 +158,7 @@ public static class HackContainerWriter
                 int frameOffset = f * frameSize;
                 int frameLength = Math.Min(frameSize, targetRom.Length - frameOffset);
                 (frames[f], seekTable[f]) = CompressHackFrame(
-                    targetRom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters, matcher);
+                    targetRom, frameOffset, frameLength, f, threadLocalBlocks.Plain, threadLocalBlocks.Dict, blockSize, enableFilters, chunkMatcher, matcher);
                 return threadLocalBlocks;
             },
             localFinally: threadLocalBlocks =>
@@ -153,6 +171,56 @@ public static class HackContainerWriter
             output.Write(frame);
 
         NdzWriter.WriteTrailer(output, seekTable);
+    }
+
+    /// <summary>
+    /// Content-defined chunking's average chunk size is a pure writer-side search
+    /// heuristic - it's never serialized to disk (unlike <c>--raw-dict</c>/<c>--block-size</c>,
+    /// which do affect the file format and so stay user-controlled), so there's no reason
+    /// not to just always pick whichever works best. Confirmed empirically (2026-09-17,
+    /// against two unrelated real ROM pairs of very different sizes) that a larger average
+    /// than <see cref="ContentDefinedChunker"/>'s own ~4 KiB default finds meaningfully more
+    /// Verbatim matches - fewer, bigger chunks per output block means fewer chances for
+    /// <see cref="ChunkRunMatcher"/>'s run-stitching to fail on one bad chunk in an
+    /// otherwise-good run - but the actual optimal size differs by ROM (roughly scaling with
+    /// ROM size), so this tries a spread of candidates and keeps whichever resolves the most
+    /// blocks, exactly like this project's own <c>--raw-dict auto</c>/<c>--block-size auto</c>
+    /// sweeps try real candidates rather than guessing a formula.
+    ///
+    /// Cheap despite trying several candidates: counting how many blocks resolve (this
+    /// method) skips the expensive part entirely (no zstd compression here, just the same
+    /// exact-match lookups <see cref="CompressHackFrame"/> would do anyway) - only the
+    /// winning configuration's matcher goes on to actually compress anything.
+    /// </summary>
+    private static readonly int[] ChunkSizeCandidatesLog2 = { 12, 13, 14, 15, 16, 17, 18 };
+
+    private static ChunkRunMatcher SelectBestChunkMatcher(
+        byte[] baseRom, byte[] targetRom, HashChainMatcher hashChainMatcher, int blockSize, int maxDegreeOfParallelism)
+    {
+        int blockCount = targetRom.Length == 0 ? 0 : (targetRom.Length + blockSize - 1) / blockSize;
+
+        var results = new (ChunkRunMatcher Matcher, int Coverage)[ChunkSizeCandidatesLog2.Length];
+        Parallel.For(0, ChunkSizeCandidatesLog2.Length,
+            new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
+            i =>
+            {
+                int avgSizeLog2 = ChunkSizeCandidatesLog2[i];
+                int avg = 1 << avgSizeLog2;
+                var candidate = new ChunkRunMatcher(baseRom, targetRom, avgSizeLog2, minChunkSize: Math.Max(64, avg / 8), maxChunkSize: avg * 4);
+
+                int coverage = 0;
+                for (int b = 0; b < blockCount; b++)
+                {
+                    int offset = b * blockSize;
+                    int length = Math.Min(blockSize, targetRom.Length - offset);
+                    if (candidate.TryFindBlockMatch(offset, length, out _) || hashChainMatcher.FindExactMatch(targetRom, offset, length, out _))
+                        coverage++;
+                }
+
+                results[i] = (candidate, coverage);
+            });
+
+        return results.MaxBy(r => r.Coverage).Matcher;
     }
 
     /// <summary>
@@ -209,7 +277,12 @@ public static class HackContainerWriter
     /// Verbatim is tried first and, on a hit, short-circuits the rest of the candidate
     /// search entirely (matches the real format's own heavy skew toward this mode - ~99%
     /// of blocks in a real sample - and avoids wasting up to 7 zstd calls per block for
-    /// the dominant unchanged/relocated-content case). Otherwise falls through to
+    /// the dominant unchanged/relocated-content case). Two Verbatim search strategies are
+    /// tried in order: <see cref="ChunkRunMatcher"/> (content-defined chunking, matching
+    /// the real packer's own approach - see its remarks) first, since it's both cheap and
+    /// the more accurate of the two; <see cref="HashChainMatcher"/>'s brute-force
+    /// fixed-position search second, as a fallback for whatever the chunk boundaries miss.
+    /// Only once neither finds a match does this fall through to
     /// <see cref="NdzWriter.CompressBlockCandidates"/> exactly like an ordinary
     /// non-base-patch frame - no windowed base-search candidate here at all, since
     /// Verbatim (arbitrary exact match) and Dict (against the base's own raw-dict) between
@@ -217,7 +290,8 @@ public static class HackContainerWriter
     /// </summary>
     private static (byte[] FrameBytes, SeekTableEntry Entry) CompressHackFrame(
         byte[] targetRom, int frameOffset, int frameLength, int frameIndex,
-        ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters, HashChainMatcher matcher)
+        ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters,
+        ChunkRunMatcher chunkMatcher, HashChainMatcher matcher)
     {
         int blockCount = (frameLength + blockSize - 1) / blockSize;
         int maxOutputSize = plainBlock.RequiredCompressOutputSize;
@@ -235,7 +309,8 @@ public static class HackContainerWriter
             int blockOffset = frameOffset + b * blockSize;
             int blockLength = Math.Min(blockSize, frameOffset + frameLength - blockOffset);
 
-            if (matcher.FindExactMatch(targetRom, blockOffset, blockLength, out int sourcePos))
+            if (chunkMatcher.TryFindBlockMatch(blockOffset, blockLength, out int sourcePos) ||
+                matcher.FindExactMatch(targetRom, blockOffset, blockLength, out sourcePos))
             {
                 BinaryPrimitives.WriteUInt32LittleEndian(offsetBytes, (uint)sourcePos);
                 blockData.Write(offsetBytes);

@@ -626,14 +626,89 @@ closed out).
 
 **Implemented 2026-09-16** - `NdzFlags.HackContainer` (bit 6), `BlockMode.Verbatim` (mode 7),
 `Compression.HackContainerWriter` (write) and `Compression.NdzArchive.Open`'s `baseNdzBytes`
-parameter (read), reusing a promoted `XDelta.HashChainMatcher` (shared with `VcdiffEncoder`)
-for mode 7's exact-match search. Verified both ways against real files: our reader decodes a
-genuine ndz-studio-produced `.delta.ndz` byte-exact against the real White ROM, and our own
-writer's output round-trips byte-exact against the real Black/White ROMs too (not expected to
-be byte-identical to ndz-studio's own file - its candidate-selection heuristics are its own -
+parameter (read). Verified both ways against real files: our reader decodes a genuine
+ndz-studio-produced `.delta.ndz` byte-exact against the real White ROM, and our own writer's
+output round-trips byte-exact against the real Black/White ROMs too (not expected to be
+byte-identical to ndz-studio's own file - its candidate-selection heuristics are its own -
 but correct). See `tests/Ndz.Core.Tests/HackContainerTests.cs` and
 `HackContainerRealFileTests.cs`. Wired into the CLI too (`ndz pack-hack`, `--base-ndz` on
 `decompress`/`verify`) - see `docs/ndz-remaining-work.md`. Not yet wired into the GUI.
+
+**Mode-7 search, corrected same day**: the first cut reused a promoted `XDelta.HashChainMatcher`
+(shared with `VcdiffEncoder`) for mode 7's exact-match search - functionally correct, but on
+the real 256 MB Black/White pair it landed at 38 MB against ndz-studio's own 3.15 MB, because
+that matcher hashes only a short leading prefix per byte position (right for VCDIFF's own
+small-source greedy matching) and a fixed chain-step budget spent nearly all of itself on
+unrelated data sharing that prefix before ever reaching a genuine full-block match. Widening
+the hash table/key closed most of the gap (down to ~5 MB) but not all of it. Pulling the real
+`ndzcore.js`/`ndzcore_bg.wasm` from ndz-studio's own site and reading the wasm's unstripped
+Rust symbols (`ndzcore::census::cdc_chunks`, `census::dup_census`'s
+`HashMap<[u8; 16], ...>`) showed the real packer uses **content-defined chunking** (gear
+hash, ~4 KiB average - the exact same algorithm and constants as
+`reference/mena-patchbench/ndztool.py`'s own retired `_cdc_chunks`), not a fixed-position
+hash search: chunk boundaries are determined by local content rather than file position, so
+identical content chunks identically wherever it sits in either ROM, including across
+relocation. `Compression.ContentDefinedChunker` (the chunker) and `Compression.ChunkRunMatcher`
+(chunks both ROMs, indexes the base's chunks by content hash, matches the target's chunks
+against it, then stitches contiguous matched-chunk runs to answer "does this fixed 8 KiB
+block exist byte-identically somewhere in the base" - always double-checked with a real byte
+compare) now do the primary search, with `HashChainMatcher` kept as a secondary fallback for
+whatever the chunk boundaries miss. Result on the real pair: 3.23 MB (32,233/32,768 blocks
+Verbatim, 98.4%) against ndz-studio's 3.15 MB (32,355/32,768, 98.7%) - and faster than either
+prior attempt (~22 s vs. the original 38 MB attempt's ~107 s). See
+`ContentDefinedChunkerTests.cs`/`ChunkRunMatcherTests.cs`. Independently verified on a second,
+unrelated real pair (Mega Man Star Force Dragon/Leo, 32 MB, different game/size entirely):
+957,212 bytes vs. ndz-studio's own 957,087 - confirms the fix generalizes rather than being
+tuned to one sample.
+
+**zstd frame-header overhead, found and fixed 2026-09-17**: decoding the actual zstd frame
+headers GrindCore emits for every compressed block showed a real, deterministic 1-byte
+overhead versus the real files: GrindCore's simple compress call always pledges the source
+size, which zstd encodes as `Single_Segment_flag` + an explicit 2-byte Frame_Content_Size
+field (7-byte header: 4-byte magic + 1-byte descriptor + 2-byte size); the real packer's own
+encoder isn't told a pledged size, so it emits a 1-byte Window_Descriptor instead (6-byte
+header) - functionally equivalent, no public GrindCore option to control it. Confirmed
+uniform across every zstd-based mode (Plain, Dict, both Shuffle filters, all three Delta
+filters) in both outputs - a fixed per-block constant, not something that can change which
+mode wins a "smallest candidate" comparison (Verbatim is chosen by a hard short-circuit
+before any zstd candidate is tried, and every zstd candidate is inflated by the same 1 byte,
+so relative ranking between them is untouched either way). Since the container already
+tracks each block's decompressed size externally, the embedded content size was never read
+by anything - `NdzWriter.TrimZstdFrameHeader` rewrites the header in place immediately after
+every compress call (Plain, Dict, base-window, and all five filters - covering ordinary
+`.ndz`/pair-container packing and hack containers alike, since they all funnel through
+`CompressBlockCandidates`/`TryFilterCandidate`), replacing the 2-byte content-size field with
+a 1-byte window descriptor sized to the actual block content length. Verified via
+`ZstdFrameHeaderTrimTests.cs` and the full existing suite (every round-trip test decodes the
+trimmed frames correctly - any conformant zstd decoder accepts either header shape). Real
+impact: Black/White 3,231,906 -> 3,231,371 bytes (-535, matching its 535 non-Verbatim
+blocks exactly); Dragon/Leo 957,212 -> 957,081 bytes (-131, matching its 131 non-Verbatim
+blocks) - **now 6 bytes smaller than ndz-studio's own 957,087**, meaning this overhead was
+the entire remaining gap on that pair.
+
+**CDC average chunk size, auto-selected 2026-09-17**: prompted by the user asking whether
+the real packer might auto-tune chunk size the way this project's own `--raw-dict auto`/
+`--block-size auto` sweep real candidates - measured `ChunkRunMatcher`'s own standalone
+coverage (no zstd, just counting resolved blocks) across a spread of average sizes on both
+real fixture pairs. Found real, substantial headroom: `ContentDefinedChunker`'s ~4 KiB
+default resolves only 74-82% of blocks on its own (the `HashChainMatcher` fallback was doing
+more of the combined 98%+ than credited); a larger average - scaled proportionally with
+min/max (min = avg/8, max = avg*4) - resolves up to 96.33% (Black/White, peaking at 64 KiB
+average) or 91.72% (Dragon/Leo, peaking at 32 KiB average) standalone. The likely mechanism:
+fewer, bigger chunks per fixed 8 KiB output block means fewer chances for
+`ChunkRunMatcher`'s run-stitching (which requires *every* overlapping chunk to match AND
+share the same base-minus-target delta) to fail on one bad chunk in an otherwise-good run.
+The optimal size differs by ROM (roughly scaling with ROM size), so rather than guess a
+formula, `HackContainerWriter.SelectBestChunkMatcher` tries a spread of candidates (2^12
+through 2^18) in parallel and keeps whichever resolves the most blocks against the *combined*
+CDC+hash-chain decision (matching what `CompressHackFrame` actually does) - cheap because
+counting resolved blocks skips the expensive zstd step entirely, unlike a real compress
+attempt per candidate. Never serialized to disk (unlike block/dict size), so no CLI flag is
+needed - always on. Real impact: Black/White 3,180,697 bytes (was 3,231,371 - Verbatim count
+32,233 -> 32,312 of 32,768, now only 43 blocks short of ndz-studio's own 32,355) and *faster*
+overall (~17s vs ~22s, since fewer blocks fall through to the much slower zstd candidate
+search); Dragon/Leo unchanged (957,081 - the default already matched what's achievable on
+that smaller ROM). See `ChunkSizeTuningExperiment.cs` for the raw sweep data.
 
 ## Reference materials
 
