@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Deliberately NOT referenced by NDZ.slnx or any project under src/: this is
+         detached, ready-to-use reference material, not wired into the real NDZ pipeline.
+         See README.md for why, and what's still open. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pure managed C# VCDIFF/xdelta3 implementation, no native binaries. Verified in a
+         2026-09-15 investigation (see README.md and ../../docs/xdelta-vcdiff-notes.md) by
+         round-tripping against a real xdelta3.exe 3.2.0 reference build, both directions,
+         including a 107MB/7-window real-world file. -->
+    <PackageReference Include="VCDiff" Version="5.0.0" />
+  </ItemGroup>
+
+</Project>
