@@ -36,6 +36,22 @@ explicitly out of scope for what's built so far). What *is* now real: applying/g
 standalone `.xdelta`/VCDIFF patches — useful for both ROM hacks and version diffs — works
 correctly and interoperates with the real tooling.
 
+**Update 2026-09-16 (later the same day): the "Open question" below is now mostly answered**,
+by reverse-engineering three real files a real `ndz-studio` "Pack hack" run produced (not
+guessed) — see `docs/ndz-format-spec.md`'s new "xdelta-based `.delta.ndz` / hack container"
+section for the full writeup. Short version: **the on-cart `.delta.ndz` does not contain
+VCDIFF/xdelta data at all.** The disqualifying concern in option 2 below (VCDIFF is
+sequential, can't support the hardware's random-access block reads) turned out to be exactly
+right, and real `xdelta3` is only ever used PC-side, to reconstruct the full target ROM from
+base + patch before packing — the same way option 1 describes, just as an internal
+implementation step of "Pack hack" rather than the only way to use it. The actual on-disk
+container is a *new variant* of the existing random-access-friendly block/frame mechanism:
+whole 8 KiB blocks are either copied verbatim from an explicit offset in the base (new mode
+7, confirmed to handle real content relocation, not just same-position matches) or
+zstd-compressed against a base-derived dictionary whose exact addressing scheme (mode 0) is
+still unresolved for a small fraction of blocks (~0.36% of the real sample) — genuinely
+blocked on real information from Mena now, not a wide-open question.
+
 ---
 
 Status (original, 2026-09-15): **investigation complete, nothing wired in.** Written after the

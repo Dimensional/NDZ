@@ -106,7 +106,8 @@ packer: it is not simply a set of independent boolean flags.
 | 3 | `Filters` — **not really about filter transforms specifically**: this bit gates whether a per-block mode array exists in each frame at all. Without it, every block in a frame is uniformly `Dict` (if a dictionary is present) or `Plain` (if not) — no per-block byte to read. `NdzWriter` always writes a mode array (even when every block is Plain/Dict, no real filter transform involved) and so must always set this bit — confirmed empirically 2026-08-31 by cross-testing against `ndztool.py`'s real decoder in both directions; see "Per-block compression mode" below. |
 | 4 | `BasePatch` — this file's frames encode a patch against a base `.nds` (previously the only bit this spec documented) |
 | 5 | `RawDictionary` — a raw, self-referential content-dictionary section follows the front-matter |
-| 6–7 | never set by the reference packer — reserved/unknown |
+| 6 | never set by the reference packer, but **observed set** (alongside bit 4) in real ndz-studio output from its 2026-09-16-era "Pack hack" feature — see "xdelta-based hack container" below. Meaning partially reverse-engineered, not yet fully understood or implemented here. |
+| 7 | never observed set — reserved/unknown |
 | 8+ | **not a boolean** — the block size, packed as `log2(blockSize)`, with `0` itself a sentinel meaning "unspecified, default to 4096" rather than a literal `1 << 0 = 1` — confirmed against `ndztool.py`'s own decode logic (see "Reference materials"). See `NdzFlagsExtensions.GetBlockSizeLog2`/`GetBlockSize`/`WithBlockSize`. The field's width is confirmed exactly 8 bits (bits 8-15) by `ndztool.py`'s own `describe_flags`, which computes `(flags >> 8) & 0xFF`. |
 
 Do not repurpose any undefined bit speculatively - reserved bits stay zero pending the
@@ -549,6 +550,72 @@ specific *selection* of it.
 Only the retired trained-dictionary flag (bit 2) remains genuinely out of scope now, and
 deliberately so, not silently dropped: `NdzFlags` documents exactly why, and both read
 and write paths reject anything that would require it rather than mishandling it.
+
+### xdelta-based `.delta.ndz` / hack container — partially reverse-engineered 2026-09-16, blocked
+
+ndz-studio added a "Pack hack" feature: give it a base ROM and either a second ROM or an
+existing `.xdelta` patch, and it produces a `.delta.ndz` (alongside a plain, standalone
+`.xdelta` you can also download - real xdelta3 3.2.0, running in-browser). The site's own
+words: *"you get a small .delta.ndz that holds only what the hack changes; the cart takes
+the rest from the base .ndz while you play."* No spec or sample from Mena exists for this;
+`ndztool.py` has no code path for it at all - confirmed by testing it directly, it can't
+open one (see below). Everything here comes from reverse-engineering three real files Mena's
+own tool produced (a real base `.ndz`, a real `.delta.ndz`, and the standalone `.xdelta` it
+was built from - saved for reference at `E:\source\git\NitroTwl\test_files`, outside this
+repo). **Do not guess further on the unresolved part below - wait for real information from
+Mena.**
+
+**What's confirmed, byte-exact against the real reconstructed ROM:**
+
+- It's not a new container type - same `NDZ1` magic, same 16 KiB front-matter, same frame
+  table/trailer layout as any other `.ndz`. Flags are the existing v2/zstd/filters bits plus
+  `BasePatch` (bit 4) *and* the new bit 6 together.
+- Despite bit 4 being set, **the per-frame `u32 baseOff[n]` array bit 4 normally implies does
+  not exist** - confirmed by exact byte-accounting (`header size + sum(block compressed
+  sizes) == recorded frame size`) across all 2048 frames of the real file with zero
+  mismatches, assuming a frame header of just `blockCsize[n]` + `mode[n]` and nothing else.
+  Bit 6 evidently changes what bit 4 means, not just adding to it.
+- The base-ROM identity fields bit 4 normally requires (`baseOriginalSize`, `baseGameCode`,
+  `baseHeaderHash`) are all zero in the real file - this format doesn't verify or need an
+  externally-supplied raw base `.nds` the way ordinary base-patch mode does.
+- The file's own top-level `gameCode` field holds the **base's** game code (e.g. Black's
+  `IRAO`), not the content this file reconstructs (White's `IRBO`) - i.e. this field's role
+  changes to "which base this hack needs," presumably so the cart can locate the base's own
+  `.ndz` by game code rather than needing a raw `.nds` supplied out of band.
+- The per-block mode byte gains a new value, **7**, beyond the existing 0-6: the block's
+  compressed-data slot holds a literal 4-byte little-endian offset into the base ROM, and the
+  block's content is exactly that many bytes copied verbatim from the base at that offset -
+  no zstd involved at all. Confirmed against real content: this is **not always the block's
+  own aligned position** - most mode-7 blocks are unchanged content and the offset equals
+  their own position, but one whole cluster of consecutive blocks in the real sample has an
+  offset pointing elsewhere in the base entirely (content relocated, not just edited),
+  incrementing by exactly one block size per block - i.e. real content-address matching
+  against the base, not naive positional diffing. 32,355 of 32,768 blocks (98.7%) in the real
+  sample use this mode.
+- Modes 1 and 3-6 (plain/delta/shuffle) are the *existing*, already-implemented per-block
+  filter modes, self-contained, no base reference - unchanged and confirmed correct.
+- Reconstructing the full 256 MB target ROM this way (mode 7 via its stored offset, modes
+  1/3-6 as normal, mode 0 - see below - left unsolved) matches the real ROM exactly for
+  32,650 of 32,768 blocks (99.6%).
+
+**What's still unresolved:** mode **0** (133 blocks in the real sample, 118 still unexplained
+after solving mode 7 - about 0.36% of the file, ~870 KB of the payload). It clearly needs a
+raw-content zstd dictionary (it fails to decompress without one) but exhaustive testing ruled
+out: any block-aligned offset anywhere in the entire base ROM (brute-forced all ~32,768
+candidate positions - zero matches), a leading or trailing stored offset in the block's own
+bytes the way mode 7 has, self-referential already-decoded target content, and the real
+`.xdelta` patch's own COPY-instruction address map (resolved only 4 of 133). Whatever
+dictionary source mode 0 uses, it isn't any of these - likely a non-block-aligned offset into
+the base that isn't stored anywhere obvious, which isn't practical to brute-force at byte
+granularity. **Paused here** pending real information from Mena, per this project's standing
+rule against guessing at format details without a real reference.
+
+xdelta/VCDIFF itself does not appear to be embedded in the on-disk `.delta.ndz` at all,
+despite the feature's name - real xdelta3 is used PC-side only, to reconstruct the full
+target ROM from base + patch before packing, confirming the user's suspicion over the
+initial assumption that the container itself would carry VCDIFF data (see
+`docs/xdelta-vcdiff-notes.md` for the standalone VCDIFF/DJW codec, which remains correct and
+useful on its own - this container question is orthogonal to it).
 
 ## Reference materials
 
