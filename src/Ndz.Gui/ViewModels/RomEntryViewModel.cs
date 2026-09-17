@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using Ndz.Core.Archives;
 using Ndz.Core.Compression;
 using Ndz.Core.Format;
+using Ndz.Core.XDelta;
 using Ndz.Gui.Models;
 
 namespace Ndz.Gui.ViewModels;
@@ -46,9 +47,21 @@ public partial class RomEntryViewModel : ViewModelBase
     /// <summary>
     /// Bindable mirror of <see cref="PairContainerPolicy.CreationEnabled"/> - drives
     /// whether a card's "+" target strip shows at all (see MainWindow.axaml). Flipping
-    /// the Core flag back on re-enables this automatically, nothing here to touch.
+    /// the Core flag back on re-enables this automatically, nothing here to touch. Only
+    /// meaningful for a raw-ROM card in the first place - see <see cref="ShowPairTargetSection"/>.
     /// </summary>
     public bool PairPackingEnabled => PairContainerPolicy.CreationEnabled;
+
+    /// <summary>
+    /// Whether to show the pair-target strip/disabled-message block at all - a packed-base
+    /// card (<see cref="IsPackedBase"/>) shows neither, since <see cref="NdzPairWriter"/>
+    /// needs a raw base ROM and there'd be nothing informative about calling out the
+    /// unrelated <see cref="PairContainerPolicy"/> gate on a card the gate was never about.
+    /// </summary>
+    public bool ShowPairTargetSection => !IsPackedBase;
+
+    /// <summary>Whether to show this card's own Analyze/Pack/dictionary/block-size controls - hidden for a packed-base card (<see cref="IsPackedBase"/>), which is already packed and has nothing left to decide about itself.</summary>
+    public bool ShowFullPackControls => !IsPackedBase;
 
     private readonly Action<RomEntryViewModel> _onRemove;
 
@@ -128,6 +141,16 @@ public partial class RomEntryViewModel : ViewModelBase
     /// <summary>This card's patch targets, if any - rendered as small chips, not full cards. Empty for a target itself (see the class remarks).</summary>
     public ObservableCollection<RomEntryViewModel> Targets { get; } = [];
 
+    /// <summary>
+    /// This card's `.delta.ndz` hack jobs, if any - a genuinely different relationship
+    /// from <see cref="Targets"/> (see <see cref="HackTargetViewModel"/>'s own remarks):
+    /// each one needs an already-packed base `.ndz` (or builds one) and always produces
+    /// its own standalone output file, never merged with anything. Never populated for a
+    /// nested target itself, same as <see cref="Targets"/> - the star topology has no
+    /// further nesting.
+    /// </summary>
+    public ObservableCollection<HackTargetViewModel> HackTargets { get; } = [];
+
     /// <summary>The curated block-size menu (see <see cref="NdzConstants.SupportedBlockSizes"/>) plus <see cref="SizeOption.Auto"/> - fixed, doesn't grow from Analyze the way <see cref="DictionarySizeOptions"/> does, since there's already a real curated Core menu for this one.</summary>
     public ObservableCollection<SizeOption> BlockSizeOptions { get; } =
         new([SizeOption.Auto, .. NdzConstants.SupportedBlockSizes.Select(SizeOption.FromBytes)]);
@@ -173,7 +196,33 @@ public partial class RomEntryViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isPacking;
 
-    public string PackButtonText => IsPacking ? "Packing…" : "Pack";
+    /// <summary>
+    /// Adapts to what this one button actually does: a plain solo/pair pack (no hacks
+    /// attached), or - once one or more <see cref="HackTargets"/> are attached - the
+    /// combined build <see cref="PackWithHacksAsync"/> performs (the base too, if this
+    /// card is a raw ROM rather than an already-packed one). One button, one action,
+    /// whatever that action currently is - not a second button competing for attention.
+    /// </summary>
+    public string PackButtonText
+    {
+        get
+        {
+            if (IsPacking)
+                return "Packing…";
+            if (HackTargets.Count == 0)
+                return "Pack";
+            string hacks = $"{HackTargets.Count} hack{(HackTargets.Count == 1 ? "" : "s")}";
+            return IsPackedBase ? $"Build {hacks}" : $"Build base + {hacks}";
+        }
+    }
+
+    /// <summary>
+    /// Whether the pack button (and its result/error) shows at all - hidden only for a
+    /// packed-base card with no hack targets yet attached, since there's nothing at all to
+    /// do with it until then (it's already packed, and building a hack is the only thing
+    /// this button now does for that kind of card).
+    /// </summary>
+    public bool ShowPackButton => !IsPackedBase || HackTargets.Count > 0;
 
     partial void OnIsPackingChanged(bool value) => OnPropertyChanged(nameof(PackButtonText));
 
@@ -190,6 +239,19 @@ public partial class RomEntryViewModel : ViewModelBase
     partial void OnPackResultTextChanged(string? value) => OnPropertyChanged(nameof(HasPackResult));
     partial void OnPackErrorChanged(string? value) => OnPropertyChanged(nameof(HasPackError));
 
+    /// <summary>
+    /// True for a card sourced from an already-packed .ndz rather than a raw ROM (dropped
+    /// straight onto the Pack tab - see <see cref="MainWindowViewModel.AddPathsAsync"/>'s
+    /// own remarks). Not something to pack again - it already is - so this card shows
+    /// neither pair-target nor Analyze/Pack controls, only its <see cref="HackTargets"/>
+    /// section: it exists purely to be a hack's base with zero extra configuration, since
+    /// <see cref="Source"/>'s own bytes already ARE the packed .ndz a hack needs, and its
+    /// raw ROM bytes (for the actual byte-matching) are one <c>NdzArchive.Open(...).DecompressAll()</c>
+    /// away - see <see cref="HackTargetViewModel"/>'s own remarks on why this beats needing
+    /// a separate build-or-browse step per hack target.
+    /// </summary>
+    public bool IsPackedBase { get; }
+
     public RomEntryViewModel(
         RomSource source,
         Bitmap icon,
@@ -202,6 +264,7 @@ public partial class RomEntryViewModel : ViewModelBase
         byte romVersion,
         ushort bannerVersion,
         long fileSizeBytes,
+        bool isPackedBase,
         Action<RomEntryViewModel> onRemove)
     {
         Source = source;
@@ -210,6 +273,7 @@ public partial class RomEntryViewModel : ViewModelBase
         FullTitle = fullTitle;
         GameCode = gameCode;
         RomVersion = romVersion;
+        IsPackedBase = isPackedBase;
         RevisionText = romVersion != 0 ? $"Rev {romVersion}" : string.Empty;
         PlatformText = unitCode switch
         {
@@ -224,16 +288,28 @@ public partial class RomEntryViewModel : ViewModelBase
         SourceFileText = $"{source.ShortLabel} · {fileSizeBytes / (1024.0 * 1024.0):0.#} MB";
         _onRemove = onRemove;
 
+        // A packed base's front matter carries no unit-code/region byte (only a raw ROM's
+        // header does), so PlatformText/DestinationText above are meaningless placeholders
+        // for one - left out of the tooltip rather than shown as if they were real.
         var tooltipLines = new List<string>();
         if (!string.IsNullOrEmpty(fullTitle))
             tooltipLines.Add(fullTitle);
-        tooltipLines.Add($"{gameCode}{(HasRevision ? " · " + RevisionText : "")} · {PlatformText} · {DestinationText}");
-        if (HasRegionLock)
+        if (isPackedBase)
+            tooltipLines.Add($"{gameCode} · packed base (.ndz)");
+        else
+            tooltipLines.Add($"{gameCode}{(HasRevision ? " · " + RevisionText : "")} · {PlatformText} · {DestinationText}");
+        if (!isPackedBase && HasRegionLock)
             tooltipLines.Add(RegionLockText);
-        if (HasBannerNote)
+        if (!isPackedBase && HasBannerNote)
             tooltipLines.Add(BannerNote);
         tooltipLines.Add(source.FullLabel);
         TooltipText = string.Join("\n\n", tooltipLines);
+
+        HackTargets.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(PackButtonText));
+            OnPropertyChanged(nameof(ShowPackButton));
+        };
     }
 
     [RelayCommand]
@@ -417,5 +493,132 @@ public partial class RomEntryViewModel : ViewModelBase
         }
 
         return new FileInfo(outputPath).Length;
+    }
+
+    /// <summary>
+    /// Builds this base AND every attached <see cref="HackTargets"/> job in one combined
+    /// action, into <paramref name="outputFolder"/> - the GUI equivalent of the CLI's own
+    /// `pack-hack --build-base` convenience, generalized to N hack targets at once. A
+    /// packed-base card (<see cref="IsPackedBase"/>) skips straight to building each hack,
+    /// reusing its own already-packed bytes; a raw-ROM card builds its own base .ndz first
+    /// (named from <see cref="ShortTitle"/>, using this card's own selected block/dictionary
+    /// size, Auto resolving exactly like a plain solo pack would), then reuses those same
+    /// bytes for every hack. Each hack target's own delta is named from ITS OWN
+    /// <see cref="HackTargetViewModel.ShortTitle"/> and round-trip verified independently -
+    /// one failing doesn't stop the rest, all outcomes are reported together.
+    /// </summary>
+    public async Task PackWithHacksAsync(string outputFolder)
+    {
+        IsPacking = true;
+        PackError = null;
+        PackResultText = null;
+        try
+        {
+            string summary = await Task.Run(() => PackWithHacksCore(outputFolder));
+            PackResultText = summary;
+        }
+        catch (Exception ex)
+        {
+            PackError = $"Build failed: {ex.Message}";
+        }
+        finally
+        {
+            IsPacking = false;
+        }
+    }
+
+    private string PackWithHacksCore(string outputFolder)
+    {
+        byte[] baseRom;
+        byte[] baseNdzBytes;
+        string baseSummary;
+
+        if (IsPackedBase)
+        {
+            baseNdzBytes = Source.ReadBytes();
+            using (NdzArchive archive = NdzArchive.Open(baseNdzBytes))
+                baseRom = archive.DecompressAll();
+            baseSummary = $"base \"{ShortTitle}\" (already packed)";
+        }
+        else
+        {
+            baseRom = Source.ReadBytes();
+            int blockSize = SelectedBlockSize.Bytes ?? BlockSizeAnalyzer.Analyze(baseRom, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedBlockSize;
+            int dictSize = SelectedDictionarySize.Bytes ?? DictionaryAnalyzer.Analyze(baseRom, null, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedDictionarySize;
+
+            string basePath = UniquePath(Path.Combine(outputFolder, SanitizeFileName(ShortTitle) + ".ndz"));
+            using (FileStream output = File.Create(basePath))
+                NdzWriter.Compress(baseRom, output, blockSize: blockSize, rawDictionarySize: dictSize, maxDegreeOfParallelism: MaxDegreeOfParallelism);
+            baseNdzBytes = File.ReadAllBytes(basePath);
+
+            using (NdzArchive archive = NdzArchive.Open(baseNdzBytes))
+            {
+                if (!archive.DecompressAll().AsSpan().SequenceEqual(baseRom))
+                    throw new InvalidDataException("round-trip check failed on the base.");
+            }
+            baseSummary = $"base \"{Path.GetFileName(basePath)}\" ({SizeOption.FromBytes((int)Math.Min(new FileInfo(basePath).Length, int.MaxValue)).Label})";
+        }
+
+        var hackSummaries = new List<string>();
+        var hackErrors = new List<string>();
+        foreach (HackTargetViewModel hack in HackTargets)
+        {
+            try
+            {
+                byte[] targetRom = hack.Kind == HackTargetKind.XdeltaPatch
+                    ? XDeltaCodec.Apply(baseRom, hack.Source.ReadBytes())
+                    : hack.Source.ReadBytes();
+
+                int blockSize = BlockSizeAnalyzer.Analyze(targetRom, maxDegreeOfParallelism: MaxDegreeOfParallelism).RecommendedBlockSize;
+                string deltaPath = UniquePath(Path.Combine(outputFolder, SanitizeFileName(hack.ShortTitle) + ".delta.ndz"));
+
+                using (FileStream output = File.Create(deltaPath))
+                    HackContainerWriter.Compress(targetRom, baseRom, baseNdzBytes, output, blockSize: blockSize, maxDegreeOfParallelism: MaxDegreeOfParallelism);
+
+                using (NdzArchive archive = NdzArchive.Open(File.ReadAllBytes(deltaPath), baseNdzBytes: baseNdzBytes))
+                {
+                    if (!archive.DecompressAll().AsSpan().SequenceEqual(targetRom))
+                        throw new InvalidDataException("round-trip check failed.");
+                }
+
+                hackSummaries.Add($"\"{Path.GetFileName(deltaPath)}\" ({SizeOption.FromBytes((int)Math.Min(new FileInfo(deltaPath).Length, int.MaxValue)).Label})");
+            }
+            catch (Exception ex)
+            {
+                hackErrors.Add($"\"{hack.ShortTitle}\": {ex.Message}");
+            }
+        }
+
+        var parts = new List<string> { $"Built {baseSummary}" };
+        if (hackSummaries.Count > 0)
+            parts.Add($"{hackSummaries.Count} hack{(hackSummaries.Count == 1 ? "" : "s")}: {string.Join(", ", hackSummaries)}");
+        if (hackErrors.Count > 0)
+            parts.Add($"{hackErrors.Count} failed: {string.Join("; ", hackErrors)}");
+        return string.Join(". ", parts) + " - verified byte-exact.";
+    }
+
+    /// <summary>Appends " (2)", " (3)", ... rather than silently overwriting an unrelated file that happens to already have this exact derived name in the chosen folder.</summary>
+    private static string UniquePath(string path)
+    {
+        if (!File.Exists(path))
+            return path;
+
+        string dir = Path.GetDirectoryName(path) ?? "";
+        string name = Path.GetFileNameWithoutExtension(path);
+        string ext = Path.GetExtension(path);
+        // Handles the ".delta.ndz" double-extension case too: GetFileNameWithoutExtension
+        // only strips the last segment, so "Foo.delta" + ".ndz" becomes "Foo.delta (2).ndz" -
+        // still unique, still clearly named, just not re-splitting ".delta" out specially.
+        for (int i = 2; File.Exists(path); i++)
+            path = Path.Combine(dir, $"{name} ({i}){ext}");
+        return path;
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        char[] invalid = Path.GetInvalidFileNameChars();
+        string cleaned = new(name.Where(c => !invalid.Contains(c)).ToArray());
+        cleaned = cleaned.Trim();
+        return cleaned.Length > 0 ? cleaned : "output";
     }
 }

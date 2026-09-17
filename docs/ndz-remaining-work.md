@@ -278,15 +278,76 @@ which is for ordinary base-patch mode's raw `.nds` instead). Verified end-to-end
 real Black/White ROMs via the CLI itself, both with a pre-existing base `.ndz` and with
 `--build-base` building it fresh in the same command.
 
-**Not started**: GUI wiring (a queued-item flow mirroring `RomEntryViewModel.Targets` - the
-GUI is already merged into this branch, so no separate branch reconciliation is needed).
+**GUI done too, 2026-09-17, then refined the same day from real usage**: a new
+`HackTargetViewModel` per hack job, nested under a base `RomEntryViewModel` card in its own
+`HackTargets` collection - deliberately separate from `Targets` (pair-container targets),
+since a hack job always produces its own standalone output file, never merged with anything.
+Reached via a dedicated "+ hack target" control (accepts a ROM or an `.xdelta` patch) rather
+than the plain "+" strip, since unlike a plain drop - which always means a pair target -
+there's genuine ambiguity a separate control resolves outright; dropping an `.xdelta` directly
+onto a card is unambiguous on its own and is routed there automatically. Never gated by
+`PairContainerPolicy.CreationEnabled` - that gate is about the pair-container format's own
+unresolved multi-dictionary design, unrelated to hack containers.
+
+Went through two more iterations from real usage before landing on the final design:
+
+1. First cut gave each hack target a "Use existing / Build now" toggle, the latter opening a
+   *second* save dialog (for the freshly-built base `.ndz`) right next to the "Pack hack"
+   button's own save dialog for the delta - flagged as confusing (two saves reading as one
+   action).
+2. Second cut let the Pack tab accept a `.ndz` too (`RomEntryViewModel.IsPackedBase`), and made
+   a hack target under a raw-ROM card browse for an already-packed `.ndz` instead of building
+   one. Flagged again: browsing for a `.ndz` that doesn't exist yet is a dead end - there was no
+   way to build the base and the hack together from just a raw ROM + a patch anymore, which was
+   the actual point of the CLI's own `pack-hack --build-base`.
+
+Landed on: `HackTargetViewModel` is now a **pure passive record** of what's attached - icon,
+title, remove button, nothing else. Every hack container's building is *fully automatic* and
+happens through the base card's own single action button
+(`RomEntryViewModel.PackWithHacksAsync`), whose text/behavior adapts to what it actually does
+(`PackButtonText`): plain "Pack" with no hacks attached (unchanged solo/pair behavior, one output
+file); "Build base + N hacks" for a raw-ROM card with hacks attached (builds the base `.ndz`
+first - named from the card's own title, using its own selected block/dictionary size - then
+every hack's own `.delta.ndz`, named from each hack's own title, all into one chosen destination
+*folder* rather than a single file, since this now writes more than one); "Build N hacks" for an
+`IsPackedBase` card (skips straight to the hacks, reusing the card's own already-packed bytes -
+`RomSource.RealFilePath` reuses the existing file directly when there is one, otherwise the
+resolved bytes get written out alongside the deltas). One button, one action, always seamless -
+mirrors the CLI's own `pack-hack --build-base` exactly, generalized to N hack targets in one go.
+`AddTargetsAsync` (pair targets) still rejects `.ndz` - `NdzPairWriter` needs raw bytes and a
+pair target's whole point is merging into one shared file, neither of which applies to something
+already packed.
+
+Drag-and-drop now also works on both "+" bubbles (Pack tab's hack-target strip, Examine's
+attach-base strip), not just click-to-browse - the single window-level drop handler recognizes
+a drop landing specifically inside either one (`Tag="HackTargetStrip"`/`Tag="AttachBaseStrip"`)
+before falling through to its own more general routing (pair-target routing for the Pack tab,
+plain source-add for Examine), the same technique already used for the "RomCard" pair-target
+region.
+
+On the Examine side, a `.delta.ndz` prompts for its base's own `.ndz` (`RequiresExternalBaseNdz`,
+mutually exclusive with the existing `RequiresExternalBaseRom`), and the entry's summary/header
+text calls out the hack-container-specific field semantics (repurposed `GameCode`,
+dictionary-from-base) the same way `ndz info` already does. Also refined from the same
+feedback round: the base prompt used to re-open a file picker on *every* Unpack/Checksums
+click - real use called that tedious for something that never changes between clicks on the
+same entry. Replaced with an attach-once model: a "+" bubble (`ExamineEntryViewModel.AttachExternalBase`)
+becomes a small "Base: filename" chip with its own detach button once set, and Unpack/Checksums
+just reuse it (`CanRunUnpack`/`CanRunChecksums`, gated on `IsBaseReady`) without prompting
+again. `ExamineSourceViewModel.UnpackAllAsync` respects an already-attached base too, only
+skipping (and calling out in its summary) entries that still need one.
+
+Verified: full solution builds clean, the existing 284-test suite still passes unmodified, and
+the app launches without a runtime XAML/binding error - the actual interactive click-through
+still needs a human at the keyboard, since that's not something this environment can drive
+itself.
 
 ## Suggested build order
 
 1. ~~**Filter modes**~~ - done, see the update note above.
 2. ~~**Base-patch**~~ - done, see the update note above.
 3. ~~**Pair container**~~ - done, see the update note above.
-4. ~~**Hack container library**~~ - done, see §4 above. CLI/GUI wiring still open.
+4. ~~**Hack container**~~ - done: library, CLI, and GUI all implemented and verified - see §4 above.
 
 All three original items in this plan are implemented and cross-verified against
 `ndztool.py`. What's left there, per `docs/ndz-format-spec.md`'s "Open questions": only the

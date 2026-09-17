@@ -108,20 +108,21 @@ public partial class ExamineSourceViewModel : ViewModelBase
                     continue;
                 total++;
 
-                // A standalone base-patched .ndz (never a pair-container entry - those
-                // always resolve their own base internally) needs a base ROM this bulk
-                // operation has no window to prompt for - real in practice only for a
-                // single-entry source, where ShowUnpackAll is false anyway and this path
-                // is just a defensive fallback, not something a user can actually trigger
-                // today.
-                if (entry.RequiresExternalBaseRom)
+                // A standalone base-patched .ndz or hack container (never a pair-container
+                // entry - those always resolve their own base internally) needs its base
+                // attached first (see ExamineEntryViewModel.AttachExternalBase) - if the
+                // user already attached one via that entry's own "+" bubble before running
+                // Unpack All, IsBaseReady is true and this just uses it like any other
+                // entry; otherwise there's no window here to prompt for one, so it's
+                // skipped and called out in the summary instead.
+                if (!entry.IsBaseReady)
                 {
                     needsBase++;
                     continue;
                 }
 
                 string path = Path.Combine(outputFolder, MakeUniqueFileName(entry, usedNames));
-                await entry.UnpackAsync(path, externalBaseRom: null);
+                await entry.UnpackAsync(path);
                 if (entry.HasUnpackError)
                     failed++;
                 else
@@ -132,7 +133,7 @@ public partial class ExamineSourceViewModel : ViewModelBase
             if (failed > 0)
                 parts.Add($"{failed} failed - see each entry below");
             if (needsBase > 0)
-                parts.Add($"{needsBase} need{(needsBase == 1 ? "s" : "")} its base ROM - use its own Unpack button");
+                parts.Add($"{needsBase} need{(needsBase == 1 ? "s" : "")} its base attached first - use its own \"+\" bubble, then Unpack");
             UnpackAllResultText = string.Join(", ", parts) + ".";
         }
         catch (Exception ex)

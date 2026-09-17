@@ -235,11 +235,17 @@
                                                 <TextBlock Text="Already in queue" Foreground="{DynamicResource Text.Warning}" FontSize="11" FontWeight="SemiBold"/>
                                             </Border>
 
+                                            <Border IsVisible="{Binding IsPackedBase}" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="6" Padding="8,5">
+                                                <TextBlock Text="Packed base (.ndz) — attach hack targets below" Foreground="{DynamicResource Text.Tertiary}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+
                                             <!-- Target chips - this card's patch targets, if any. A plain vertical
                                                  StackPanel (not a WrapPanel) so each chip stretches to the card's full
                                                  content width instead of hugging its own content and leaving a gap -
                                                  the title column below absorbs whatever space the icon/dropdown/remove
-                                                 button don't need. -->
+                                                 button don't need. Hidden entirely for a packed-base card - see
+                                                 RomEntryViewModel.ShowPairTargetSection's remarks. -->
+                                            <StackPanel Spacing="10" IsVisible="{Binding ShowPairTargetSection}">
                                             <ItemsControl ItemsSource="{Binding Targets}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
@@ -278,13 +284,66 @@
                                                 <TextBlock Text="+ drop a ROM here or click to browse" Foreground="{DynamicResource Text.Muted}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"/>
                                             </Button>
                                             <TextBlock IsVisible="{Binding !PairPackingEnabled}" Text="Combining ROMs into one file is temporarily disabled" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap" TextAlignment="Center"/>
+                                            </StackPanel>
 
-                                            <TextBlock Text="{Binding PlatformText}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            <!-- Hack jobs (.delta.ndz) - a different relationship from Targets above: each
+                                                 one always produces its own standalone output file, never merged with
+                                                 anything (see HackTargetViewModel's remarks). Never gated by
+                                                 PairPackingEnabled - that's specifically about the pair-container
+                                                 format's own unresolved multi-dictionary design. Purely a passive
+                                                 "what's attached" display - no per-chip options or action button at
+                                                 all: this card's own single Pack button (below) builds the base (if
+                                                 needed) and every attached hack together, in one action - see
+                                                 RomEntryViewModel.PackWithHacksAsync's remarks on why two earlier
+                                                 per-chip designs were both confusing in real use. -->
+                                            <ItemsControl ItemsSource="{Binding HackTargets}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Vertical" Spacing="6"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:HackTargetViewModel">
+                                                        <Border Background="{DynamicResource Surface.Nested}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="8" Padding="6,5" ToolTip.Tip="{Binding TooltipText}">
+                                                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                                                <Border Grid.Column="0" Width="20" Height="20" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="3">
+                                                                    <Panel>
+                                                                        <Image Source="{Binding Icon}" IsVisible="{Binding !IsPatchKind}" Width="16" Height="16" RenderOptions.BitmapInterpolationMode="None"/>
+                                                                        <TextBlock Text="🩹" IsVisible="{Binding IsPatchKind}" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Panel>
+                                                                </Border>
+                                                                <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding ShortTitle}" Foreground="{DynamicResource Text.Secondary}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                                    <TextBlock Text="Hack target (.delta.ndz)" Foreground="{DynamicResource Text.Muted}" FontSize="9.5"/>
+                                                                </StackPanel>
+                                                                <Button Grid.Column="2" Classes="chipx" Command="{Binding RemoveCommand}" Content="✕" FontSize="8" VerticalAlignment="Center"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- Tag="HackTargetStrip" lets code-behind's drop handler recognize a
+                                                 drop landed specifically here (drag-and-drop, not just click-to-browse)
+                                                 before it ever falls through to the card's own pair-target routing. -->
+                                            <Button Tag="HackTargetStrip" Classes="targetstrip" Click="OnAddHackTargetClicked">
+                                                <TextBlock Text="+ hack target (drop or browse: ROM or .xdelta)" Foreground="{DynamicResource Text.Muted}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center"/>
+                                            </Button>
+
+                                            <TextBlock Text="{Binding PlatformText}" IsVisible="{Binding ShowFullPackControls}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" TextWrapping="Wrap"/>
                                             <TextBlock Text="{Binding BannerNote}" IsVisible="{Binding HasBannerNote}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontStyle="Italic" TextWrapping="Wrap"/>
                                             <TextBlock Text="{Binding SourceFileText}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" FontFamily="Consolas,Menlo,monospace" TextTrimming="CharacterEllipsis"/>
 
-                                            <Border Height="1" Background="{DynamicResource Border.Divider}"/>
+                                            <!-- Analyze/Pack/dictionary/block-size - this card's own packing controls,
+                                                 hidden entirely for a packed-base card (RomEntryViewModel.ShowFullPackControls):
+                                                 it's already packed, there's nothing left to decide about itself. -->
+                                            <!-- Shared by both sections below (their own visibility conditions overlap
+                                                 completely in the "show nothing" case: a packed-base card with no
+                                                 hacks yet shows neither) - a single divider, not one per section, to
+                                                 avoid a doubled-up line when both happen to show at once. -->
+                                            <Border Height="1" Background="{DynamicResource Border.Divider}" IsVisible="{Binding ShowPackButton}"/>
 
+                                            <StackPanel Spacing="10" IsVisible="{Binding ShowFullPackControls}">
                                             <Grid ColumnDefinitions="*,*">
                                                 <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
                                                     <TextBlock Text="DICTIONARY" Foreground="{DynamicResource Text.Muted}" FontSize="9.5" FontWeight="Bold"/>
@@ -316,7 +375,13 @@
                                             <Border IsVisible="{Binding HasAnalysisError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
                                                 <TextBlock Text="{Binding AnalysisError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
                                             </Border>
+                                            </StackPanel>
 
+                                            <!-- The one action button - see RomEntryViewModel.PackButtonText's own
+                                                 remarks on what it actually does, which varies by whether hacks are
+                                                 attached and whether this card is itself a packed base. Hidden only
+                                                 for a packed-base card with no hacks yet - nothing to do until then. -->
+                                            <StackPanel Spacing="10" IsVisible="{Binding ShowPackButton}">
                                             <Button Classes="primary" Content="{Binding PackButtonText}" Click="OnPackClicked" IsEnabled="{Binding !IsPacking}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
 
                                             <Border IsVisible="{Binding HasPackResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="8,6">
@@ -325,6 +390,7 @@
                                             <Border IsVisible="{Binding HasPackError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
                                                 <TextBlock Text="{Binding PackError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
                                             </Border>
+                                            </StackPanel>
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -408,10 +474,24 @@
                                                                         <TextBlock Text="{Binding SummaryText}" Foreground="{DynamicResource Text.Tertiary}" FontSize="10.5" TextWrapping="Wrap"/>
                                                                     </StackPanel>
                                                                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                                                        <Button Classes="ghost" Content="{Binding ChecksumsButtonText}" Click="OnChecksumsClicked" IsEnabled="{Binding !IsComputingChecksums}" FontSize="11" Padding="10,5"/>
-                                                                        <Button Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding !IsUnpacking}" FontSize="11" Padding="10,5"/>
+                                                                        <Button Classes="ghost" Content="{Binding ChecksumsButtonText}" Click="OnChecksumsClicked" IsEnabled="{Binding CanRunChecksums}" FontSize="11" Padding="10,5"/>
+                                                                        <Button Classes="ghost" Content="{Binding UnpackButtonText}" Click="OnUnpackClicked" IsVisible="{Binding CanUnpack}" IsEnabled="{Binding CanRunUnpack}" FontSize="11" Padding="10,5"/>
                                                                     </StackPanel>
                                                                 </Grid>
+
+                                                                <!-- Attach this entry's base once (see ExamineEntryViewModel.AttachExternalBase's
+                                                                     remarks on why this replaced re-prompting on every Unpack/Checksums click) -
+                                                                     a "+" bubble until attached, then a small chip naming it with its own
+                                                                     independent detach button. Only shown at all when this entry needs a base. -->
+                                                                <Button Tag="AttachBaseStrip" Classes="targetstrip" Click="OnAttachBaseClicked" IsVisible="{Binding ShowAttachBubble}" FontSize="10.5" Padding="6,5">
+                                                                    <TextBlock Text="{Binding AttachBaseLabel}" Foreground="{DynamicResource Text.Muted}" FontSize="10.5" HorizontalAlignment="Center"/>
+                                                                </Button>
+                                                                <Border IsVisible="{Binding HasAttachedExternalBase}" Background="{DynamicResource Surface.Window}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1" CornerRadius="8" Padding="6,5">
+                                                                    <Grid ColumnDefinitions="*,Auto">
+                                                                        <TextBlock Grid.Column="0" Text="{Binding AttachedBaseLabel, StringFormat='Base: {0}'}" Foreground="{DynamicResource Text.Secondary}" FontSize="10.5" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                                        <Button Grid.Column="1" Classes="chipx" Click="OnDetachBaseClicked" Content="✕" FontSize="8" VerticalAlignment="Center"/>
+                                                                    </Grid>
+                                                                </Border>
 
                                                                 <Border IsVisible="{Binding HasUnpackResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="7,5">
                                                                     <TextBlock Text="{Binding UnpackResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>

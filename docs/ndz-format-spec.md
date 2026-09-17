@@ -632,7 +632,9 @@ output round-trips byte-exact against the real Black/White ROMs too (not expecte
 byte-identical to ndz-studio's own file - its candidate-selection heuristics are its own -
 but correct). See `tests/Ndz.Core.Tests/HackContainerTests.cs` and
 `HackContainerRealFileTests.cs`. Wired into the CLI too (`ndz pack-hack`, `--base-ndz` on
-`decompress`/`verify`) - see `docs/ndz-remaining-work.md`. Not yet wired into the GUI.
+`decompress`/`verify`) - see `docs/ndz-remaining-work.md`. Wired into the GUI too, 2026-09-17
+(`HackTargetViewModel`, a new per-card collection separate from pair-container targets, plus
+Examine-side support for reading a `.delta.ndz` back) - see that same doc for the detail.
 
 **Mode-7 search, corrected same day**: the first cut reused a promoted `XDelta.HashChainMatcher`
 (shared with `VcdiffEncoder`) for mode 7's exact-match search - functionally correct, but on

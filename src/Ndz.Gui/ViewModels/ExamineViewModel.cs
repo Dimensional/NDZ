@@ -142,8 +142,8 @@ public partial class ExamineViewModel : ViewModelBase
     }
 
     private sealed record DecodedEntry(byte[] Rgba, string ShortTitle, string FullTitle, string GameCode,
-        string SummaryText, string TooltipText, bool CanUnpack, bool RequiresExternalBaseRom, string SuggestedFileName,
-        Func<byte[]?, byte[]> GetRomBytes);
+        string SummaryText, string TooltipText, bool CanUnpack, bool RequiresExternalBaseRom, bool RequiresExternalBaseNdz,
+        string SuggestedFileName, Func<byte[]?, byte[]> GetRomBytes);
 
     private sealed record DecodedSource(RomSource Source, ExamineSourceKind Kind, string HeaderText, List<DecodedEntry> Entries);
 
@@ -195,6 +195,7 @@ public partial class ExamineViewModel : ViewModelBase
             entries.Add(BuildDecodedEntry(
                 frontMatter, entry.OriginalSize, entry.Size,
                 requiresExternalBaseRom: false,
+                requiresExternalBaseNdz: false,
                 baseLabel: isBase ? null : baseTitle,
                 getRomBytes: _ => pair.DecompressEntry(index)));
             totalOriginal += entry.OriginalSize;
@@ -207,36 +208,60 @@ public partial class ExamineViewModel : ViewModelBase
     private static DecodedSource DecodeSingleNdz(RomSource source, byte[] bytes)
     {
         (NdzFrontMatter frontMatter, _) = NdzArchive.ReadInfo(bytes);
-        bool needsBase = frontMatter.Flags.HasFlag(NdzFlags.BasePatch);
-        string? baseLabel = needsBase ? DecodeGameCode(frontMatter.BaseGameCode) : null;
+        bool isHackContainer = frontMatter.Flags.HasFlag(NdzFlags.HackContainer);
+        bool needsBaseRom = frontMatter.Flags.HasFlag(NdzFlags.BasePatch) && !isHackContainer;
+        bool needsBaseNdz = isHackContainer;
+
+        // A hack container repurposes the top-level GameCode field to hold the BASE's game
+        // code (so a reader knows which base .ndz this hack attaches to), not this file's
+        // own reconstructed content's code - see NdzFlags.HackContainer's remarks. The
+        // ordinary base-patch case's own base identity lives in BaseGameCode instead.
+        string? baseLabel = isHackContainer ? DecodeGameCode(frontMatter.GameCode)
+            : needsBaseRom ? DecodeGameCode(frontMatter.BaseGameCode)
+            : null;
 
         DecodedEntry entry = BuildDecodedEntry(
             frontMatter, frontMatter.OriginalSize, (uint)bytes.LongLength,
-            requiresExternalBaseRom: needsBase,
+            requiresExternalBaseRom: needsBaseRom,
+            requiresExternalBaseNdz: needsBaseNdz,
             baseLabel: baseLabel,
             getRomBytes: externalBase =>
             {
-                if (needsBase && externalBase is null)
-                    throw new InvalidOperationException("This .ndz needs its base ROM to unpack - pick it first.");
-                using NdzArchive archive = NdzArchive.Open(bytes, externalBase);
+                if ((needsBaseRom || needsBaseNdz) && externalBase is null)
+                {
+                    throw new InvalidOperationException(needsBaseNdz
+                        ? "This .ndz is a hack container - pick its base .ndz first."
+                        : "This .ndz needs its base ROM to unpack - pick it first.");
+                }
+                using NdzArchive archive = needsBaseNdz
+                    ? NdzArchive.Open(bytes, baseNdzBytes: externalBase)
+                    : NdzArchive.Open(bytes, externalBase);
                 return archive.DecompressAll();
             });
 
-        string header = needsBase ? "Single .ndz · base-patched, needs its base ROM to unpack" : "Single .ndz";
+        string header = isHackContainer ? "Single .ndz · hack container, needs its base .ndz to unpack"
+            : needsBaseRom ? "Single .ndz · base-patched, needs its base ROM to unpack"
+            : "Single .ndz";
         return new DecodedSource(source, ExamineSourceKind.NdzSingle, header, [entry]);
     }
 
     private static DecodedEntry BuildDecodedEntry(NdzFrontMatter frontMatter, uint originalSize, uint storedSize,
-        bool requiresExternalBaseRom, string? baseLabel, Func<byte[]?, byte[]> getRomBytes)
+        bool requiresExternalBaseRom, bool requiresExternalBaseNdz, string? baseLabel, Func<byte[]?, byte[]> getRomBytes)
     {
+        bool isHackContainer = frontMatter.Flags.HasFlag(NdzFlags.HackContainer);
         byte[] rgba = NdsIcon.DecodeBitmap(frontMatter.Banner);
         string shortTitle = NdsIcon.DecodeShortTitle(frontMatter.Banner);
         string fullTitle = NdsIcon.DecodeTitle(frontMatter.Banner);
-        string gameCode = DecodeGameCode(frontMatter.GameCode);
+        // A hack container's own top-level GameCode field holds the BASE's code, not this
+        // entry's own reconstructed content's - showing it here as "this entry's code"
+        // would be actively misleading, so it's called out explicitly instead (baseLabel,
+        // set from the same field by the caller, is what actually carries that value).
+        string gameCode = isHackContainer ? "(hack - see base)" : DecodeGameCode(frontMatter.GameCode);
 
         double ratio = storedSize == 0 ? 0 : (double)originalSize / storedSize;
         var flags = new List<string>();
-        if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch)) flags.Add("base-patched");
+        if (isHackContainer) flags.Add("hack container");
+        else if (frontMatter.Flags.HasFlag(NdzFlags.BasePatch)) flags.Add("base-patched");
         // Dictionary size is a per-entry property, not just a yes/no flag - each entry in
         // a pair container can carry a different size (see docs/ndz-format-spec.md's
         // "Mena ANSWERED" remarks - independent per-entry dictionaries were confirmed NOT
@@ -244,6 +269,8 @@ public partial class ExamineViewModel : ViewModelBase
         // hardware - showing the real size here is what makes that visible at a glance).
         if (frontMatter.HasDictionary)
             flags.Add($"dictionary ({SizeOption.FromBytes((int)Math.Min(frontMatter.DictionaryDecompressedSize, int.MaxValue)).Label})");
+        else if (isHackContainer)
+            flags.Add("dictionary from base");
         if (frontMatter.Flags.HasFlag(NdzFlags.Filters)) flags.Add("filters");
         string blockSizeLabel = SizeOption.FromBytes(frontMatter.Flags.GetBlockSize()).Label;
 
@@ -261,7 +288,7 @@ public partial class ExamineViewModel : ViewModelBase
 
         string suggestedFileName = SanitizeFileName(shortTitle) + ".nds";
 
-        return new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: true, requiresExternalBaseRom, suggestedFileName, getRomBytes);
+        return new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: true, requiresExternalBaseRom, requiresExternalBaseNdz, suggestedFileName, getRomBytes);
     }
 
     private static DecodedSource DecodeRawRom(RomSource source, byte[] rom)
@@ -294,7 +321,7 @@ public partial class ExamineViewModel : ViewModelBase
         // verbatim - but it still goes through the same getRomBytes shape so
         // checksumming works uniformly with a packed entry (see ExamineEntryViewModel's
         // own remarks).
-        var entry = new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: false, RequiresExternalBaseRom: false, SuggestedFileName: string.Empty, GetRomBytes: _ => rom);
+        var entry = new DecodedEntry(rgba, shortTitle, fullTitle, gameCode, summary, tooltip, CanUnpack: false, RequiresExternalBaseRom: false, RequiresExternalBaseNdz: false, SuggestedFileName: string.Empty, GetRomBytes: _ => rom);
         return new DecodedSource(source, ExamineSourceKind.RawRom, "Raw ROM · already unpacked", [entry]);
     }
 
@@ -309,7 +336,7 @@ public partial class ExamineViewModel : ViewModelBase
         Bitmap icon = ToBitmap(decoded.Rgba);
         return decoded.CanUnpack
             ? ExamineEntryViewModel.ForPackedEntry(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText,
-                decoded.RequiresExternalBaseRom, decoded.SuggestedFileName, decoded.GetRomBytes)
+                decoded.RequiresExternalBaseRom, decoded.RequiresExternalBaseNdz, decoded.SuggestedFileName, decoded.GetRomBytes)
             : ExamineEntryViewModel.ForRawRom(icon, decoded.ShortTitle, decoded.FullTitle, decoded.GameCode, decoded.SummaryText, decoded.TooltipText, decoded.GetRomBytes);
     }
 

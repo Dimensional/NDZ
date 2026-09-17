@@ -38,9 +38,21 @@ public partial class ExamineEntryViewModel : ViewModelBase
     /// <see cref="Compression.NdzPairContainer.OpenEntry"/>) - the CLI can produce this
     /// shape even though the GUI's own Pack view never does. The view has to prompt for a
     /// base ROM file before <see cref="UnpackAsync"/> or <see cref="ComputeChecksumsAsync"/>
-    /// can succeed.
+    /// can succeed. Mutually exclusive with <see cref="RequiresExternalBaseNdz"/> - a file
+    /// needs one or the other, never both.
     /// </summary>
     public bool RequiresExternalBaseRom { get; }
+
+    /// <summary>
+    /// True for a `.delta.ndz` hack container (<see cref="NdzFlags.HackContainer"/>) - needs
+    /// its base's own already-packed `.ndz` (not a raw ROM - see
+    /// <see cref="Compression.NdzArchive.Open"/>'s <c>baseNdzBytes</c> parameter) before
+    /// <see cref="UnpackAsync"/> or <see cref="ComputeChecksumsAsync"/> can succeed.
+    /// </summary>
+    public bool RequiresExternalBaseNdz { get; }
+
+    /// <summary>Label for the "+" attach bubble - which kind of file it'll prompt for.</summary>
+    public string AttachBaseLabel => RequiresExternalBaseNdz ? "+ attach base .ndz" : "+ attach base ROM";
 
     /// <summary>Suggested output file name (without directory) for the unpack save dialog.</summary>
     public string SuggestedFileName { get; }
@@ -48,22 +60,75 @@ public partial class ExamineEntryViewModel : ViewModelBase
     /// <summary>
     /// Gets this entry's decompressed ROM bytes - a raw ROM's own bytes for
     /// <see cref="ForRawRom"/>, or a real decompress for <see cref="ForPackedEntry"/>
-    /// (<paramref name="externalBaseRom"/> only matters, and is required, when
-    /// <see cref="RequiresExternalBaseRom"/> is true). Backs both
-    /// <see cref="UnpackAsync"/> and <see cref="ComputeChecksumsAsync"/> - two different
-    /// things to do with the same bytes.
+    /// (the external-base argument only matters, and is required, when
+    /// <see cref="RequiresExternalBaseRom"/> or <see cref="RequiresExternalBaseNdz"/> is
+    /// true - see <see cref="AttachExternalBase"/>). Backs both <see cref="UnpackAsync"/>
+    /// and <see cref="ComputeChecksumsAsync"/> - two different things to do with the same
+    /// bytes.
     /// </summary>
     private readonly Func<byte[]?, byte[]> _getRomBytes;
 
     /// <summary>Cached after a successful <see cref="ComputeChecksumsAsync"/> so re-checking <see cref="ExpectedChecksumInput"/> against it doesn't need to re-decompress.</summary>
     private byte[]? _cachedRomBytes;
 
+    /// <summary>True when this entry needs an external base (either a raw ROM or a base .ndz - see <see cref="RequiresExternalBaseRom"/>/<see cref="RequiresExternalBaseNdz"/>) before it can be unpacked or checksummed at all.</summary>
+    public bool NeedsExternalBase => RequiresExternalBaseRom || RequiresExternalBaseNdz;
+
+    /// <summary>
+    /// The base's bytes, attached once via <see cref="AttachExternalBase"/> rather than
+    /// re-prompted on every Unpack/Checksums click - the first cut re-opened a file picker
+    /// dialog every single time either action ran, which real use immediately flagged as
+    /// tedious for something that doesn't change between clicks on the same entry.
+    /// </summary>
+    private byte[]? _attachedExternalBase;
+
+    [ObservableProperty]
+    private string? _attachedBaseLabel;
+
+    public bool HasAttachedExternalBase => AttachedBaseLabel is not null;
+
+    /// <summary>Whether to show the "+" attach prompt at all - true only while a required base is still missing, replaced by the attached chip once one is set.</summary>
+    public bool ShowAttachBubble => NeedsExternalBase && !HasAttachedExternalBase;
+
+    partial void OnAttachedBaseLabelChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasAttachedExternalBase));
+        OnPropertyChanged(nameof(ShowAttachBubble));
+        OnPropertyChanged(nameof(IsBaseReady));
+        OnPropertyChanged(nameof(CanRunUnpack));
+        OnPropertyChanged(nameof(CanRunChecksums));
+    }
+
+    /// <summary>Whether Unpack/Checksums can actually run right now - blocked only by a still-missing required base, never by <see cref="CanUnpack"/> alone (checksums work without it).</summary>
+    public bool IsBaseReady => !NeedsExternalBase || HasAttachedExternalBase;
+
+    /// <summary>Attaches this entry's base once - a raw ROM's bytes for <see cref="RequiresExternalBaseRom"/>, or a base .ndz's own bytes for <see cref="RequiresExternalBaseNdz"/>. Both subsequent <see cref="UnpackAsync"/> and <see cref="ComputeChecksumsAsync"/> reuse it without prompting again.</summary>
+    public void AttachExternalBase(byte[] bytes, string label)
+    {
+        _attachedExternalBase = bytes;
+        AttachedBaseLabel = label;
+    }
+
+    /// <summary>Lets the user pick a different base without leaving/re-adding this entry.</summary>
+    public void DetachExternalBase()
+    {
+        _attachedExternalBase = null;
+        AttachedBaseLabel = null;
+    }
+
     [ObservableProperty]
     private bool _isUnpacking;
 
     public string UnpackButtonText => IsUnpacking ? "Unpacking…" : "Unpack";
 
-    partial void OnIsUnpackingChanged(bool value) => OnPropertyChanged(nameof(UnpackButtonText));
+    /// <summary>Disabled while running, or while a still-required base hasn't been attached yet (see <see cref="IsBaseReady"/>) - the button itself stays visible either way, so it's always clear unpacking is possible in principle, just blocked on the "+" bubble above it.</summary>
+    public bool CanRunUnpack => !IsUnpacking && IsBaseReady;
+
+    partial void OnIsUnpackingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(UnpackButtonText));
+        OnPropertyChanged(nameof(CanRunUnpack));
+    }
 
     [ObservableProperty]
     private string? _unpackResultText;
@@ -83,7 +148,14 @@ public partial class ExamineEntryViewModel : ViewModelBase
 
     public string ChecksumsButtonText => IsComputingChecksums ? "Computing…" : "Checksums";
 
-    partial void OnIsComputingChecksumsChanged(bool value) => OnPropertyChanged(nameof(ChecksumsButtonText));
+    /// <summary>Same idea as <see cref="CanRunUnpack"/> - disabled while running or while a still-required base isn't attached yet.</summary>
+    public bool CanRunChecksums => !IsComputingChecksums && IsBaseReady;
+
+    partial void OnIsComputingChecksumsChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ChecksumsButtonText));
+        OnPropertyChanged(nameof(CanRunChecksums));
+    }
 
     [ObservableProperty]
     private string? _crc32Text;
@@ -131,7 +203,7 @@ public partial class ExamineEntryViewModel : ViewModelBase
     private bool _matchSucceeded;
 
     private ExamineEntryViewModel(Bitmap icon, string shortTitle, string fullTitle, string gameCode,
-        string summaryText, string tooltipText, bool canUnpack, bool requiresExternalBaseRom,
+        string summaryText, string tooltipText, bool canUnpack, bool requiresExternalBaseRom, bool requiresExternalBaseNdz,
         string suggestedFileName, Func<byte[]?, byte[]> getRomBytes)
     {
         Icon = icon;
@@ -142,33 +214,34 @@ public partial class ExamineEntryViewModel : ViewModelBase
         TooltipText = tooltipText;
         CanUnpack = canUnpack;
         RequiresExternalBaseRom = requiresExternalBaseRom;
+        RequiresExternalBaseNdz = requiresExternalBaseNdz;
         SuggestedFileName = suggestedFileName;
         _getRomBytes = getRomBytes;
     }
 
     public static ExamineEntryViewModel ForRawRom(Bitmap icon, string shortTitle, string fullTitle, string gameCode,
         string summaryText, string tooltipText, Func<byte[]?, byte[]> getRomBytes) =>
-        new(icon, shortTitle, fullTitle, gameCode, summaryText, tooltipText, canUnpack: false, requiresExternalBaseRom: false, suggestedFileName: string.Empty, getRomBytes);
+        new(icon, shortTitle, fullTitle, gameCode, summaryText, tooltipText, canUnpack: false, requiresExternalBaseRom: false, requiresExternalBaseNdz: false, suggestedFileName: string.Empty, getRomBytes);
 
     public static ExamineEntryViewModel ForPackedEntry(Bitmap icon, string shortTitle, string fullTitle, string gameCode,
-        string summaryText, string tooltipText, bool requiresExternalBaseRom, string suggestedFileName, Func<byte[]?, byte[]> getRomBytes) =>
-        new(icon, shortTitle, fullTitle, gameCode, summaryText, tooltipText, canUnpack: true, requiresExternalBaseRom, suggestedFileName, getRomBytes);
+        string summaryText, string tooltipText, bool requiresExternalBaseRom, bool requiresExternalBaseNdz, string suggestedFileName, Func<byte[]?, byte[]> getRomBytes) =>
+        new(icon, shortTitle, fullTitle, gameCode, summaryText, tooltipText, canUnpack: true, requiresExternalBaseRom, requiresExternalBaseNdz, suggestedFileName, getRomBytes);
 
     /// <summary>
-    /// Decompresses this entry and writes it to <paramref name="outputPath"/>.
-    /// <paramref name="externalBaseRom"/> is required (and used) only when
-    /// <see cref="RequiresExternalBaseRom"/> is true - ignored otherwise (a pair-container
-    /// entry always resolves its own base internally, and a self-contained entry needs no
+    /// Decompresses this entry and writes it to <paramref name="outputPath"/>, using
+    /// whatever base <see cref="AttachExternalBase"/> attached (required only when
+    /// <see cref="NeedsExternalBase"/> is true - ignored otherwise, since a pair-container
+    /// entry always resolves its own base internally and a self-contained entry needs no
     /// base at all).
     /// </summary>
-    public async Task UnpackAsync(string outputPath, byte[]? externalBaseRom)
+    public async Task UnpackAsync(string outputPath)
     {
         IsUnpacking = true;
         UnpackError = null;
         UnpackResultText = null;
         try
         {
-            byte[] rom = await Task.Run(() => _getRomBytes(externalBaseRom));
+            byte[] rom = await Task.Run(() => _getRomBytes(_attachedExternalBase));
             await Task.Run(() => File.WriteAllBytes(outputPath, rom));
             UnpackResultText = $"Unpacked \"{Path.GetFileName(outputPath)}\" ({SizeOption.FromBytes((int)Math.Min(rom.LongLength, int.MaxValue)).Label}).";
         }
@@ -185,16 +258,16 @@ public partial class ExamineEntryViewModel : ViewModelBase
     /// <summary>
     /// Computes CRC32/MD5/SHA-1/SHA-256 of this entry's decompressed bytes (see
     /// <see cref="RomChecksum.ComputeAll"/>) and caches them so <see cref="ExpectedChecksumInput"/>
-    /// can be checked against them live without re-decompressing. Same
-    /// <paramref name="externalBaseRom"/> contract as <see cref="UnpackAsync"/>.
+    /// can be checked against them live without re-decompressing. Same attached-base
+    /// contract as <see cref="UnpackAsync"/>.
     /// </summary>
-    public async Task ComputeChecksumsAsync(byte[]? externalBaseRom)
+    public async Task ComputeChecksumsAsync()
     {
         IsComputingChecksums = true;
         ChecksumError = null;
         try
         {
-            byte[] rom = await Task.Run(() => _getRomBytes(externalBaseRom));
+            byte[] rom = await Task.Run(() => _getRomBytes(_attachedExternalBase));
             RomChecksums checksums = await Task.Run(() => RomChecksum.ComputeAll(rom));
 
             _cachedRomBytes = rom;

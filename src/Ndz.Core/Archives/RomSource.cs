@@ -27,21 +27,25 @@ public sealed class RomSource
     /// <summary>This ROM's own extension (".nds", ".ndz", ...) - the real file's own, or the archive entry's own, never the containing archive's.</summary>
     public string Extension { get; }
 
+    /// <summary>The actual path to a real, standalone file on disk - set only by <see cref="ForFile"/>. Null for an archive entry (see <see cref="ArchiveExtractor"/>'s remarks - it's never extracted to disk), which matters when something needs a real file to point at, not just bytes: e.g. a hack container's base `.ndz` has to exist as a real file alongside the delta on the actual target device, not just live inside a `.zip`.</summary>
+    public string? RealFilePath { get; }
+
     private readonly Func<byte[]> _readBytes;
 
-    private RomSource(string shortLabel, string fullLabel, string? directoryHint, string extension, Func<byte[]> readBytes)
+    private RomSource(string shortLabel, string fullLabel, string? directoryHint, string extension, string? realFilePath, Func<byte[]> readBytes)
     {
         ShortLabel = shortLabel;
         FullLabel = fullLabel;
         DirectoryHint = directoryHint;
         Extension = extension;
+        RealFilePath = realFilePath;
         _readBytes = readBytes;
     }
 
     public static RomSource ForFile(string path)
     {
         string full = Path.GetFullPath(path);
-        return new RomSource(Path.GetFileName(path), full, Path.GetDirectoryName(full), Path.GetExtension(path), () => File.ReadAllBytes(path));
+        return new RomSource(Path.GetFileName(path), full, Path.GetDirectoryName(full), Path.GetExtension(path), full, () => File.ReadAllBytes(path));
     }
 
     /// <param name="archivePath">The archive's own path on disk.</param>
@@ -55,6 +59,7 @@ public sealed class RomSource
             $"{archiveFull} \u00bb {entryKey}",
             Path.GetDirectoryName(archiveFull),
             Path.GetExtension(entryFileName),
+            null,
             () => ArchiveExtractor.ReadEntryBytes(archivePath, entryKey));
     }
 
