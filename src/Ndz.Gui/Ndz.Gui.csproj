@@ -5,21 +5,50 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-    <!-- Self-contained only (no separate .NET install needed to run a downloaded
-         release) - deliberately NOT PublishSingleFile/PublishTrimmed like Ndz.Cli's own
-         csproj. Trimming a reflection/XAML-heavy Avalonia UI safely needs real per-page
-         verification this project hasn't done yet (unlike Ndz.Core, which the CLI's own
-         aggressive trim settings already prove trims cleanly) - a build that compiles
-         but crashes at runtime on some trimmed-away type is a worse outcome than a
-         larger download. Revisit once there's a real reason to (and a way to verify it
-         across all published RIDs, not just the host this was built on). -->
+    <!-- Trimmed + single-file, matching Ndz.Cli's own csproj, after real per-page
+         verification (2026-09-17) rather than the blanket caution this comment used to
+         carry: the only two genuinely dynamic/reflection-shaped things in this project
+         were ViewLocator's name-convention Type.GetType+Activator.CreateInstance lookup
+         (replaced with an explicit type map - see ViewLocator.cs) and ThemeService's
+         avares:// AvaloniaXamlLoader.Load(uri) for the Themes/*.axaml color dictionaries
+         (replaced with x:Class'd ResourceDictionary subclasses instantiated directly -
+         see Themes/*.axaml.cs), plus JsonSerializer's default reflection-based
+         (de)serialization for settings.json (replaced with a source-generated
+         JsonSerializerContext). Everything else - CommunityToolkit.Mvvm (compile-time
+         source generators only), Avalonia's own compiled-bindings XAML (already the
+         default here), and GrindCore.SharpCompress's archive reading for the Examine
+         view's .zip/.7z ingestion - produces zero ILLink trim warnings and was verified
+         to still work correctly after trimming (all four theme choices launched and
+         applied cleanly; a standalone trimmed harness round-tripped real .zip and .7z
+         fixtures through Ndz.Core.Archives.ArchiveExtractor byte-for-byte). .rar reading
+         specifically wasn't re-verified post-trim (no encoder on hand to build a fixture)
+         - if that ever breaks under trimming, GrindCore.SharpCompress is open source
+         (github.com/Nanook), so the fix is a TrimmerRootAssembly/root descriptor entry
+         for it, not reverting this. -->
     <SelfContained>true</SelfContained>
+    <DebugType>none</DebugType>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
+
+  <!-- DebugType=none above only stops OUR OWN managed PDBs (Ndz.Gui.pdb/Ndz.Core.pdb).
+       SkiaSharp/HarfBuzzSharp ship native debug symbols as content inside their NuGet
+       packages (libSkiaSharp.pdb/libHarfBuzzSharp.pdb) - over 100 MB combined, pure
+       debug-symbol weight with zero runtime function - and those get copied to publish
+       output regardless of DebugType. Strip every .pdb from the publish set. -->
+  <Target Name="RemovePdbsFromPublish" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\Ndz.Core\Ndz.Core.csproj" />

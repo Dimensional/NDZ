@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
@@ -91,8 +92,16 @@ public static class ThemeService
 
     private static void ApplyColorDictionary(Application app, string name)
     {
-        var uri = new Uri($"avares://Ndz.Gui/Themes/{name}.axaml");
-        var loaded = (IResourceProvider)AvaloniaXamlLoader.Load(uri, null)!;
+        // Instantiated directly (each is x:Class'd, so AvaloniaXamlLoader.Load(this) in
+        // its own constructor resolves to a compile-time-generated populate call) rather
+        // than dynamically loaded by avares:// URI - keeps this trim-safe, since the old
+        // Load(Uri, Uri) overload carries RequiresUnreferencedCode.
+        IResourceProvider loaded = name switch
+        {
+            "Light" => new Themes.LightTheme(),
+            "Signature" => new Themes.SignatureTheme(),
+            _ => new Themes.DarkTheme(),
+        };
 
         if (_currentThemeDictionary is not null)
             app.Resources.MergedDictionaries.Remove(_currentThemeDictionary);
@@ -136,7 +145,7 @@ public static class ThemeService
         {
             if (File.Exists(SettingsPath))
             {
-                var settings = JsonSerializer.Deserialize<SettingsFile>(File.ReadAllText(SettingsPath));
+                var settings = JsonSerializer.Deserialize(File.ReadAllText(SettingsPath), SettingsJsonContext.Default.SettingsFile);
                 if (settings?.Theme is not null && Enum.TryParse<AppTheme>(settings.Theme, out var theme))
                     return theme;
             }
@@ -154,7 +163,7 @@ public static class ThemeService
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            string json = JsonSerializer.Serialize(new SettingsFile { Theme = theme.ToString() });
+            string json = JsonSerializer.Serialize(new SettingsFile { Theme = theme.ToString() }, SettingsJsonContext.Default.SettingsFile);
             File.WriteAllText(SettingsPath, json);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -164,8 +173,17 @@ public static class ThemeService
         }
     }
 
-    private sealed class SettingsFile
+    internal sealed class SettingsFile
     {
         public string? Theme { get; set; }
     }
+}
+
+/// <summary>
+/// Source-generated instead of the default reflection-based (de)serializer, so
+/// <see cref="ThemeService"/>'s settings.json round-trip stays trim/AOT-safe.
+/// </summary>
+[JsonSerializable(typeof(ThemeService.SettingsFile))]
+internal partial class SettingsJsonContext : JsonSerializerContext
+{
 }

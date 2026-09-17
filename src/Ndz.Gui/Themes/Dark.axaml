@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="Ndz.Gui.Themes.DarkTheme">
     <!-- A standard, neutral dark theme - true grays rather than Signature's blue-slate
          tint, closer to what most dark-mode apps default to. Accent blue and the
          success/warning/error hues are kept identical to Signature on purpose (a

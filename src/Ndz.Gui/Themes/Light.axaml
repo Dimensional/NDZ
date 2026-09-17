@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="Ndz.Gui.Themes.LightTheme">
     <!-- A real light theme, not just an inverted dark one - success/warning/error use
          darker, more saturated hues than the dark themes' pastel-on-black versions, since
          a pastel that reads clearly on near-black is too washed out to read on

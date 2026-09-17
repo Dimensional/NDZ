@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="Ndz.Gui.Themes.SignatureTheme">
     <!-- The original hand-tuned dark palette this whole GUI was designed against (a
          slightly blue-slate dark, not neutral gray) - kept byte-for-byte as its own named
          theme rather than folded into "Dark", since the user wanted it preserved as a

@@ -75,10 +75,9 @@ jobs:
           path: ndz-${{ matrix.rid }}.*
           if-no-files-found: error
 
-  # The GUI (NDZ Forge), self-contained per RID - no .NET install required. Deliberately
-  # NOT single-file/trimmed, unlike the CLI above: Ndz.Gui.csproj's own comment on
-  # <SelfContained> explains why trimming a reflection/XAML-heavy Avalonia UI isn't
-  # something this project has verified safe yet. Verified locally (win-x64: published,
+  # The GUI (NDZ Forge), self-contained, trimmed, single-file per RID - same as the CLI
+  # above since 2026-09-17 (see Ndz.Gui.csproj's own comment on <SelfContained> for what
+  # was actually verified before flipping this on). Verified locally (win-x64: published,
   # launched, confirmed running via a real process check, not just "it compiled") before
   # this job was ever added - same cross-compile-from-one-host approach as publish-native.
   publish-gui:
