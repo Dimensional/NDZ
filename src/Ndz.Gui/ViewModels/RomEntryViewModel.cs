@@ -240,6 +240,40 @@ public partial class RomEntryViewModel : ViewModelBase
     partial void OnPackErrorChanged(string? value) => OnPropertyChanged(nameof(HasPackError));
 
     /// <summary>
+    /// A second, clearly-separate action from <see cref="PackWithHacksAsync"/>: instead of
+    /// building a `.delta.ndz` container, this writes each <see cref="HackTargetKind.DirectRom"/>
+    /// hack target's diff against this card's base ROM as a standalone `.xdelta` (VCDIFF)
+    /// patch file - the raw format any xdelta-compatible tool can apply, independent of
+    /// NDZ entirely. Only shown when at least one attached hack target is a direct ROM
+    /// (<see cref="HackTargetKind.XdeltaPatch"/> targets already ARE a patch - nothing to
+    /// generate). Deliberately one button covering every eligible target at once, into one
+    /// chosen destination folder - not a button per chip, which is exactly the kind of
+    /// per-target control that real use already flagged as confusing for the `.delta.ndz`
+    /// flow (see <see cref="HackTargetViewModel"/>'s own remarks).
+    /// </summary>
+    public bool ShowCreatePatchButton => HackTargets.Any(h => h.Kind == HackTargetKind.DirectRom);
+
+    [ObservableProperty]
+    private bool _isCreatingPatches;
+
+    public string CreatePatchButtonText => IsCreatingPatches ? "Creating patch(es)…" : "Create .xdelta patch(es)";
+
+    partial void OnIsCreatingPatchesChanged(bool value) => OnPropertyChanged(nameof(CreatePatchButtonText));
+
+    [ObservableProperty]
+    private string? _patchResultText;
+
+    public bool HasPatchResult => !string.IsNullOrEmpty(PatchResultText);
+
+    [ObservableProperty]
+    private string? _patchError;
+
+    public bool HasPatchError => !string.IsNullOrEmpty(PatchError);
+
+    partial void OnPatchResultTextChanged(string? value) => OnPropertyChanged(nameof(HasPatchResult));
+    partial void OnPatchErrorChanged(string? value) => OnPropertyChanged(nameof(HasPatchError));
+
+    /// <summary>
     /// True for a card sourced from an already-packed .ndz rather than a raw ROM (dropped
     /// straight onto the Pack tab - see <see cref="MainWindowViewModel.AddPathsAsync"/>'s
     /// own remarks). Not something to pack again - it already is - so this card shows
@@ -309,6 +343,7 @@ public partial class RomEntryViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(PackButtonText));
             OnPropertyChanged(nameof(ShowPackButton));
+            OnPropertyChanged(nameof(ShowCreatePatchButton));
         };
     }
 
@@ -527,6 +562,10 @@ public partial class RomEntryViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Shared by <see cref="PackWithHacksCore"/> and <see cref="CreateXdeltaPatchesCore"/> - both need this card's own base ROM bytes, whether that means reading a raw ROM directly or decompressing an already-packed base .ndz.</summary>
+    private byte[] ResolveBaseRomBytes() =>
+        IsPackedBase ? NdzArchive.Open(Source.ReadBytes()).DecompressAll() : Source.ReadBytes();
+
     private string PackWithHacksCore(string outputFolder)
     {
         byte[] baseRom;
@@ -595,6 +634,80 @@ public partial class RomEntryViewModel : ViewModelBase
         if (hackErrors.Count > 0)
             parts.Add($"{hackErrors.Count} failed: {string.Join("; ", hackErrors)}");
         return string.Join(". ", parts) + " - verified byte-exact.";
+    }
+
+    /// <summary>
+    /// Writes a standalone `.xdelta` (VCDIFF) patch for every attached
+    /// <see cref="HackTargetKind.DirectRom"/> hack target, against this card's own base ROM -
+    /// the raw diff format, not a `.delta.ndz` container (see <see cref="ShowCreatePatchButton"/>'s
+    /// own remarks on how this differs from <see cref="PackWithHacksAsync"/>). Round-trip
+    /// verifies each written patch (applies it back against the base and compares to the
+    /// target), matching every other build path in this class - an earlier version of this
+    /// comment reasoned there was nothing to verify against since a diff is "pure and
+    /// deterministic," which missed that <see cref="XDelta.XDeltaCodec.Apply"/> is exactly
+    /// the re-derivation to compare against, and turned out to matter in practice: two real
+    /// bugs (a windowing overflow and a DJW bitstream desync) were found in
+    /// <see cref="XDelta.XDeltaCodec.Generate"/>'s own encode path shortly after windowing
+    /// was introduced, which would have shipped a silently-corrupt `.xdelta` here with no
+    /// safety net at all.
+    /// </summary>
+    public async Task CreateXdeltaPatchesAsync(string outputFolder)
+    {
+        IsCreatingPatches = true;
+        PatchError = null;
+        PatchResultText = null;
+        try
+        {
+            string summary = await Task.Run(() => CreateXdeltaPatchesCore(outputFolder));
+            PatchResultText = summary;
+        }
+        catch (Exception ex)
+        {
+            PatchError = $"Patch creation failed: {ex.Message}";
+        }
+        finally
+        {
+            IsCreatingPatches = false;
+        }
+    }
+
+    private string CreateXdeltaPatchesCore(string outputFolder)
+    {
+        byte[] baseRom = ResolveBaseRomBytes();
+
+        var summaries = new List<string>();
+        var errors = new List<string>();
+        foreach (HackTargetViewModel hack in HackTargets.Where(h => h.Kind == HackTargetKind.DirectRom))
+        {
+            try
+            {
+                byte[] targetRom = hack.Source.ReadBytes();
+                byte[] patch = XDeltaCodec.Generate(baseRom, targetRom, MaxDegreeOfParallelism);
+
+                string patchPath = UniquePath(Path.Combine(outputFolder, SanitizeFileName(hack.ShortTitle) + ".xdelta"));
+                File.WriteAllBytes(patchPath, patch);
+
+                // Re-read from disk (not the in-memory patch just written) and re-apply, so
+                // what's checked is the file as it actually landed - same convention as
+                // PackWithHacksCore's own verification, see this method's own remarks.
+                byte[] reapplied = XDeltaCodec.Apply(baseRom, File.ReadAllBytes(patchPath));
+                if (!reapplied.AsSpan().SequenceEqual(targetRom))
+                    throw new InvalidDataException("round-trip check failed - the written patch didn't apply back to the original target ROM byte-for-byte.");
+
+                summaries.Add($"\"{Path.GetFileName(patchPath)}\" ({SizeOption.FromBytes(patch.Length).Label})");
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"\"{hack.ShortTitle}\": {ex.Message}");
+            }
+        }
+
+        var parts = new List<string>();
+        if (summaries.Count > 0)
+            parts.Add($"Wrote {summaries.Count} patch{(summaries.Count == 1 ? "" : "es")}: {string.Join(", ", summaries)}{(errors.Count == 0 ? " - verified byte-exact." : ".")}");
+        if (errors.Count > 0)
+            parts.Add($"{errors.Count} failed: {string.Join("; ", errors)}");
+        return parts.Count > 0 ? string.Join(". ", parts) : "No direct-ROM hack targets to diff.";
     }
 
     /// <summary>Appends " (2)", " (3)", ... rather than silently overwriting an unrelated file that happens to already have this exact derived name in the chosen folder.</summary>

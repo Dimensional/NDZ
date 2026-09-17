@@ -150,6 +150,8 @@
                 </MenuItem>
             </MenuItem>
             <MenuItem Header="_Help">
+                <MenuItem Header="Help…" Click="OnHelpClicked"/>
+                <Separator/>
                 <MenuItem Header="About NDZ Forge…" Click="OnAboutClicked"/>
             </MenuItem>
         </Menu>
@@ -389,6 +391,22 @@
                                             </Border>
                                             <Border IsVisible="{Binding HasPackError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
                                                 <TextBlock Text="{Binding PackError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                            </StackPanel>
+
+                                            <!-- A separate, clearly-labeled action from the Build button above: writes a
+                                                 raw standalone .xdelta patch per direct-ROM hack target instead of a
+                                                 .delta.ndz container - see RomEntryViewModel.ShowCreatePatchButton's
+                                                 own remarks. One button for every eligible target at once, not one
+                                                 per chip. -->
+                                            <StackPanel Spacing="10" IsVisible="{Binding ShowCreatePatchButton}">
+                                            <Button Classes="ghost" Content="{Binding CreatePatchButtonText}" Click="OnCreatePatchesClicked" IsEnabled="{Binding !IsCreatingPatches}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+
+                                            <Border IsVisible="{Binding HasPatchResult}" Background="{DynamicResource Surface.Success}" BorderBrush="{DynamicResource Border.Success}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding PatchResultText}" Foreground="{DynamicResource Text.Success}" FontSize="10.5" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <Border IsVisible="{Binding HasPatchError}" Background="{DynamicResource Surface.Error}" BorderBrush="{DynamicResource Border.Error}" BorderThickness="1" CornerRadius="7" Padding="8,6">
+                                                <TextBlock Text="{Binding PatchError}" Foreground="{DynamicResource Text.Error}" FontSize="10.5" TextWrapping="Wrap"/>
                                             </Border>
                                             </StackPanel>
                                         </StackPanel>

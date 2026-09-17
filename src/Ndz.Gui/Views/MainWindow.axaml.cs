@@ -241,6 +241,42 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Writes each attached direct-ROM hack target's diff against this card's base as a
+    /// standalone .xdelta patch, into one chosen destination folder - see
+    /// <see cref="RomEntryViewModel.CreateXdeltaPatchesAsync"/>. Deliberately its own
+    /// distinct button/handler rather than folded into <see cref="OnPackClicked"/>: it
+    /// produces a fundamentally different output (a raw VCDIFF diff, not a `.delta.ndz`
+    /// container) and needs no base .ndz at all.
+    /// </summary>
+    private async void OnCreatePatchesClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: RomEntryViewModel item })
+            return;
+
+        IStorageFolder? suggestedFolder = null;
+        try
+        {
+            if (item.Source.DirectoryHint is { } dir)
+                suggestedFolder = await StorageProvider.TryGetFolderFromPathAsync(new Uri(dir));
+        }
+        catch
+        {
+            // Best-effort only - the picker just opens wherever the OS defaults to instead.
+        }
+
+        IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = $"Choose a folder for \"{item.ShortTitle}\"'s .xdelta patch(es)",
+            AllowMultiple = false,
+            SuggestedStartLocation = suggestedFolder,
+        });
+
+        string? folder = folders.FirstOrDefault()?.TryGetLocalPath();
+        if (folder is not null)
+            await item.CreateXdeltaPatchesAsync(folder);
+    }
+
+    /// <summary>
     /// Adds a hack target - a ROM or an .xdelta patch, either one landing in
     /// <see cref="RomEntryViewModel.HackTargets"/> rather than <see cref="RomEntryViewModel.Targets"/>
     /// (see <see cref="HackTargetViewModel"/>'s own remarks on why that's a separate
@@ -451,5 +487,11 @@ public partial class MainWindow : Window
     {
         var about = new AboutWindow();
         await about.ShowDialog(this);
+    }
+
+    private async void OnHelpClicked(object? sender, RoutedEventArgs e)
+    {
+        var help = new HelpWindow();
+        await help.ShowDialog(this);
     }
 }

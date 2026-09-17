@@ -1,0 +1,58 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Ndz.Gui.Views.HelpWindow"
+        Width="520" Height="560"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Surface.Window}"
+        Title="NDZ Forge Help">
+
+    <!-- Styled inline, same reasoning as AboutWindow: window-local, simple enough not to
+         need a shared-styles setup of its own. -->
+    <DockPanel Margin="20">
+        <Button DockPanel.Dock="Bottom" Content="Close" Click="OnCloseClicked" HorizontalAlignment="Center" Margin="0,14,0,0"
+                Background="Transparent" BorderBrush="{DynamicResource Border.Ghost}" BorderThickness="1"
+                CornerRadius="7" Foreground="{DynamicResource Text.Primary}" Padding="14,7" FontWeight="SemiBold"/>
+
+        <ScrollViewer>
+            <StackPanel Spacing="16">
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Pack tab" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="Drop a .nds/.dsi ROM (or a folder/archive of them) to queue it for packing into .ndz - a compressed, seekable container. Drop a .zip/.7z/.rar and its ROMs are read directly, nothing extracted to disk. Analyze samples the real ROM to recommend a block size and dictionary size; Auto resolves the same recommendation at pack time if left untouched."/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="The &quot;+&quot; strip on a card" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="Drop or browse another full ROM here to pair it with the card as a base-patched target - both ship together in one multi-entry .ndz, sharing the base's dictionary. Not for hacks/patches - see below."/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Hack targets and .delta.ndz" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="The &quot;+ hack target&quot; strip accepts either a full modified ROM or an existing .xdelta patch against the base - no other options, nothing to configure per target. Drop an .nds/.dsi ROM directly onto the Pack tab, then attach one or more hacks: clicking this card's own Build button packs the base .ndz (if it isn't one already) AND every attached hack's .delta.ndz together, in one action, into one chosen folder. A .delta.ndz stores a ROM hack cheaply against its base - you always need that base .ndz to unpack it again later (see Examine below)."/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Create .xdelta patch(es)" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="A separate button, shown once at least one direct-ROM hack target is attached. Instead of a .delta.ndz container, this writes a raw standalone .xdelta (VCDIFF) patch describing the diff from the base ROM to each attached target - the same format any xdelta-compatible tool can apply, independent of NDZ. Useful for distributing a patch on its own rather than a packed hack container."/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="A packed .ndz dropped on the Pack tab" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="Shows as an already-packed base card: no Analyze/Pack controls of its own (it's already packed), just its attached hack targets and the same combined Build button, which now only needs to build the hacks."/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Examine tab" Foreground="{DynamicResource Text.Primary}" FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12" TextWrapping="Wrap"
+                               Text="Drop .ndz/.nds/.dsi files (or folders/archives) to inspect them: title, game code, checksums (CRC32/MD5/SHA-1/SHA-256, with a paste-to-verify box), and Unpack back to a raw ROM. A base-patched entry or a .delta.ndz hack container needs its base attached first - a &quot;+&quot; bubble appears asking for the base ROM or the base .ndz respectively; attach it once and Unpack/Checksums become available for that entry."/>
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
