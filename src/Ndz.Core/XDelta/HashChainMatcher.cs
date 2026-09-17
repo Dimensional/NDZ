@@ -49,7 +49,13 @@ public sealed class HashChainMatcher
     /// anyway. Confirmed empirically: widening from 4 to 16 raised real-sample Verbatim
     /// coverage from 56% to ndz-studio's own observed ~99%.
     /// </param>
-    public HashChainMatcher(byte[] source, int maxChainSteps = DefaultMaxChainSteps, int hashBits = DefaultHashBits, int keyBytes = HashBytes)
+    /// <param name="maxDegreeOfParallelism">
+    /// Bounds the hash-precompute pass's own parallelism (see the constructor's remarks) -
+    /// same <see cref="ParallelOptions.MaxDegreeOfParallelism"/> convention used throughout
+    /// this codebase (e.g. <see cref="Compression.NdzWriter.Compress"/>,
+    /// <see cref="VcdiffEncoder.Encode"/>). -1 (the default) means no limit.
+    /// </param>
+    public HashChainMatcher(byte[] source, int maxChainSteps = DefaultMaxChainSteps, int hashBits = DefaultHashBits, int keyBytes = HashBytes, int maxDegreeOfParallelism = -1)
     {
         if (hashBits is < 1 or > 27)
             throw new ArgumentOutOfRangeException(nameof(hashBits), hashBits, "Hash width must leave the bucket array (2^hashBits ints) within a sane memory budget.");
@@ -66,9 +72,24 @@ public sealed class HashChainMatcher
 
         if (source.Length >= _keyBytes)
         {
-            for (int i = 0; i <= source.Length - _keyBytes; i++)
+            // Building the chain links (_prev[i] = _head[h]; _head[h] = i;) is an inherently
+            // sequential linked-list insert - but computing each position's own hash isn't,
+            // and for a real ROM-sized source that hash pass (reading source bytes + a few
+            // multiplies per position, hundreds of millions of times) is the dominant cost,
+            // confirmed empirically: building this chain for a 256 MB source took ~2.8s of a
+            // ~4.7s encode, almost entirely on a single core. Precomputing hashes in parallel
+            // then linking sequentially (cheap - just array reads/writes, no hashing) keeps
+            // the link step's ordering guarantee (later positions win ties within a bucket,
+            // same lookup preference as before) while using every core for the expensive part.
+            int count = source.Length - _keyBytes + 1;
+            var hashes = new uint[count];
+            Parallel.For(0, count,
+                new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
+                i => hashes[i] = Hash(source, i));
+
+            for (int i = 0; i < count; i++)
             {
-                uint h = Hash(source, i);
+                uint h = hashes[i];
                 _prev[i] = _head[h];
                 _head[h] = i;
             }

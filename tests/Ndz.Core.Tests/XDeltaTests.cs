@@ -59,6 +59,72 @@ public class XDeltaTests
         Assert.True(delta.Length < target.Length / 4);
     }
 
+    /// <summary>
+    /// Every other test in this file uses a target well under
+    /// <see cref="VcdiffEncoder.TargetWindowSize"/> (8 MiB), so <c>windowCount</c> was always
+    /// 1 and the actual multi-window path (the parallel per-window encode, the per-window
+    /// source-segment bounding box, the AggregateException unwrap) had zero coverage here -
+    /// only real ROM fixtures outside this repo ever exercised it. A ~20 MB target with
+    /// several changed regions spread across what become 3 separate windows forces
+    /// <c>windowCount &gt; 1</c> and gives each window a mix of large COPY matches and a real
+    /// literal run, closer to what an actual multi-window encode looks like.
+    /// </summary>
+    [Fact]
+    public void RoundTrips_MultiWindowLargeTarget()
+    {
+        int windowSize = VcdiffEncoder.TargetWindowSize;
+        byte[] source = RandomBytes(windowSize * 3, seed: 20);
+        byte[] target = (byte[])source.Clone();
+
+        // One changed region inside each of the 3 windows this target spans.
+        RandomBytes(4096, seed: 21).CopyTo(target, windowSize / 2);
+        RandomBytes(4096, seed: 22).CopyTo(target, windowSize + windowSize / 2);
+        RandomBytes(4096, seed: 23).CopyTo(target, 2 * windowSize + windowSize / 2);
+
+        byte[] delta = XDeltaCodec.Generate(source, target);
+        byte[] applied = XDeltaCodec.Apply(source, delta);
+
+        Assert.Equal(target, applied);
+        Assert.True(delta.Length < target.Length / 4);
+    }
+
+    /// <summary>
+    /// A changed region deliberately straddling the boundary between window 0 and window 1 -
+    /// stresses the window-clamping logic in <c>FindWindowMatches</c> (a match that would
+    /// otherwise extend past <c>windowEnd</c> must be clamped, not just skipped) right at the
+    /// seam, rather than safely in a window's interior like <see cref="RoundTrips_MultiWindowLargeTarget"/>.
+    /// </summary>
+    [Fact]
+    public void RoundTrips_ChangeStraddlingWindowBoundary()
+    {
+        int windowSize = VcdiffEncoder.TargetWindowSize;
+        byte[] source = RandomBytes(windowSize * 2, seed: 24);
+        byte[] target = (byte[])source.Clone();
+
+        RandomBytes(4096, seed: 25).CopyTo(target, windowSize - 2048);
+
+        byte[] delta = XDeltaCodec.Generate(source, target);
+        byte[] applied = XDeltaCodec.Apply(source, delta);
+
+        Assert.Equal(target, applied);
+    }
+
+    /// <summary>Multi-threaded parallel encode must produce the exact same result as the same input encoded with no parallelism - windows are independent, but this confirms ordering/assembly isn't accidentally order-dependent.</summary>
+    [Fact]
+    public void Encode_ParallelAndSequential_ProduceIdenticalOutput()
+    {
+        int windowSize = VcdiffEncoder.TargetWindowSize;
+        byte[] source = RandomBytes(windowSize * 3, seed: 26);
+        byte[] target = (byte[])source.Clone();
+        RandomBytes(4096, seed: 27).CopyTo(target, windowSize / 2);
+        RandomBytes(4096, seed: 28).CopyTo(target, 2 * windowSize + 100);
+
+        byte[] parallel = VcdiffEncoder.Encode(source, target, maxDegreeOfParallelism: -1);
+        byte[] sequential = VcdiffEncoder.Encode(source, target, maxDegreeOfParallelism: 1);
+
+        Assert.Equal(sequential, parallel);
+    }
+
     [Fact]
     public void RoundTrips_UnrelatedBuffers()
     {

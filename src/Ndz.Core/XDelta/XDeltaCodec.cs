@@ -19,10 +19,10 @@ public static class XDeltaCodec
     public static void ApplyToFile(string sourcePath, string deltaPath, string outputPath) =>
         File.WriteAllBytes(outputPath, Apply(File.ReadAllBytes(sourcePath), File.ReadAllBytes(deltaPath)));
 
-    /// <summary>Generates a VCDIFF delta describing how to turn <paramref name="source"/> into <paramref name="target"/>.</summary>
-    public static byte[] Generate(byte[] source, byte[] target) => VcdiffEncoder.Encode(source, target);
+    /// <summary>Generates a VCDIFF delta describing how to turn <paramref name="source"/> into <paramref name="target"/>. See <see cref="VcdiffEncoder.Encode"/> for <paramref name="maxDegreeOfParallelism"/>.</summary>
+    public static byte[] Generate(byte[] source, byte[] target, int maxDegreeOfParallelism = -1) => VcdiffEncoder.Encode(source, target, maxDegreeOfParallelism);
 
-    /// <summary>File-path convenience for <see cref="Generate(byte[], byte[])"/>.</summary>
-    public static void GenerateToFile(string sourcePath, string targetPath, string deltaOutputPath) =>
-        File.WriteAllBytes(deltaOutputPath, Generate(File.ReadAllBytes(sourcePath), File.ReadAllBytes(targetPath)));
+    /// <summary>File-path convenience for <see cref="Generate(byte[], byte[], int)"/>.</summary>
+    public static void GenerateToFile(string sourcePath, string targetPath, string deltaOutputPath, int maxDegreeOfParallelism = -1) =>
+        File.WriteAllBytes(deltaOutputPath, Generate(File.ReadAllBytes(sourcePath), File.ReadAllBytes(targetPath), maxDegreeOfParallelism));
 }

@@ -19,6 +19,26 @@ namespace Ndz.Core.XDelta.Djw;
 /// something it decodes itself) - it's a layer xdelta3 adds around every secondary
 /// compressor uniformly, DJW included.
 /// </para>
+///
+/// <para>
+/// 2026-09-17: fixed a real bitstream-desync bug in <see cref="CompressWindow"/>'s group-count
+/// handling, found via <see cref="VcdiffEncoder"/>'s windowed encoding of a real 256 MB ROM
+/// pair (a 240 KB all-zero-byte section - the kind of degenerate, low-diversity data that
+/// windowing's much smaller per-window sections make newly likely, that a huge single-window
+/// section basically never was). <see cref="BuildInitialPartition"/>'s own "too many groups
+/// for this data - drop one and retry" loop (matching real xdelta3's `goto regroup`) can
+/// reduce a requested <c>groups &gt; 1</c> all the way down to exactly 1 for such data. Real
+/// xdelta3 re-checks <c>groups == 1</c> AFTER that reduction and switches to its dedicated
+/// single-group encode path when it lands there - a path that never writes a sector-size
+/// field or a group-selector stream at all. This port originally checked <c>groups == 1</c>
+/// only against the ORIGINALLY requested count, so a reduced-to-1 section still took the
+/// multi-group write path and wrote a sector-size field the decoder's own <c>groups &gt; 1</c>
+/// gate would never read back - every bit read after that point came out shifted, eventually
+/// surfacing as an out-of-range Huffman code length far downstream in
+/// <see cref="DjwHuffman.BuildDecodeTable"/>. Confirmed fixed against the real downloaded
+/// xdelta3 3.2.0 source (not guessed): both this project's own decoder and real
+/// <c>xdelta3.exe</c> now decode the affected patch byte-exact.
+/// </para>
 /// </summary>
 public static class DjwCodec
 {
@@ -70,6 +90,22 @@ public static class DjwCodec
 
         (int groups, int sectorSize) = ChooseGroupsAndSectorSize(data.Length);
 
+        // BuildInitialPartition's own "too many groups for this data - drop one and retry"
+        // loop (real xdelta3's "goto regroup") can reduce a requested groups > 1 down to
+        // exactly 1 for a low-diversity section (confirmed via a real 240 KB all-zero-byte
+        // section pulled from a real ROM diff). Real xdelta3 re-checks `groups == 1` AFTER
+        // that reduction and switches to its single-group encode path when it lands there -
+        // critically, that path never writes a sector-size field or a group-selector stream
+        // at all, matching the decoder's own `if (groups > 1)` gate on reading either. An
+        // earlier version of this port only checked `groups == 1` against the ORIGINAL
+        // requested count, so a reduced-to-1 section still fell into the multi-group write
+        // path and wrote a sector-size field the decoder would never read - a bitstream
+        // desync that corrupted every bit read afterward, eventually surfacing as an
+        // out-of-range Huffman code length far downstream in BuildDecodeTable.
+        byte[][] evolveClen = null!; // assigned below whenever groups > 1, which is guaranteed by the time it's read (see the groups == 1 early return just below)
+        if (groups > 1)
+            (groups, evolveClen) = BuildInitialPartition(realFreq, data.Length, groups);
+
         if (groups == 1)
         {
             var clen = new byte[DjwConstants.AlphabetSize];
@@ -78,7 +114,7 @@ public static class DjwCodec
             if (outputBits + DjwConstants.EfficiencyBits >= inputBits)
                 return null;
 
-            writer.WriteBits(groups - 1, DjwConstants.GroupBits);
+            writer.WriteBits(0, DjwConstants.GroupBits); // groups - 1 == 0
             var clenAsInt = new int[DjwConstants.AlphabetSize];
             for (int i = 0; i < DjwConstants.AlphabetSize; i++) clenAsInt[i] = clen[i];
             EncodePrefixStream(writer, clenAsInt, DjwConstants.AlphabetSize);
@@ -91,8 +127,6 @@ public static class DjwCodec
             writer.Flush();
             return output.ToArray();
         }
-
-        (groups, byte[][] evolveClen) = BuildInitialPartition(realFreq, data.Length, groups);
 
         int sectors = 1 + (data.Length - 1) / sectorSize;
         var gbest = new int[sectors];
