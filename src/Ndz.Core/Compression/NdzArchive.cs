@@ -23,6 +23,18 @@ namespace Ndz.Core.Compression;
 ///
 /// Holds the whole compressed file in memory; frames are decompressed lazily and the
 /// most recently used one is cached for fast sequential reads.
+///
+/// <para>
+/// <b>Not thread-safe.</b> A single instance carries mutable state shared across calls -
+/// the single-frame cache, a scratch buffer reused for Shuffle2/Shuffle4 decoding, and a
+/// dictionary of lazily-built base-window <c>ZStdBlock</c> instances - none of it
+/// synchronized. Concurrent calls into the SAME instance (e.g. two threads both calling
+/// <see cref="ReadAt"/>) can race on any of these and return wrong bytes silently, not just
+/// throw. Open a separate <see cref="NdzArchive"/> per thread instead (cheap: it just wraps
+/// the same in-memory <c>byte[]</c>, already fully decoded front-matter/seek-table) if
+/// concurrent random-access reads are ever needed - e.g. the NKDS VFS use case this format
+/// is meant to eventually support.
+/// </para>
 /// </summary>
 public sealed class NdzArchive : IDisposable
 {
@@ -408,6 +420,15 @@ public sealed class NdzArchive : IDisposable
                         $"Frame {frameIndex} block {b} uses Verbatim/{(byte)BlockMode.Verbatim} mode, " +
                         "but this archive has no base .ndz decompressed - only valid in a HackContainer file.");
                 }
+                // blockCsize is always exactly 4 for a well-formed Verbatim block (see
+                // HackContainerWriter) - checked explicitly, not just assumed, since the
+                // bounds check above only verifies room for a hardcoded 4 bytes while the
+                // offset-advance below trusts whatever's actually on disk. A corrupted file
+                // with a wrong csize here would otherwise desync srcOffset for every
+                // subsequent block in the frame, producing a confusing failure (or wrong
+                // bytes) far from the actual point of corruption instead of failing here.
+                if (blockCsize != 4)
+                    throw new InvalidDataException($"Frame {frameIndex} block {b}'s Verbatim mode has an invalid csize ({blockCsize}, expected 4).");
                 if (srcOffset + 4 > blockData.Length)
                     throw new InvalidDataException($"Frame {frameIndex} block {b}'s Verbatim offset runs past the frame's declared data.");
 

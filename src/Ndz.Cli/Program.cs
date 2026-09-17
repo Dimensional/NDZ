@@ -223,9 +223,12 @@ static void PrintUsage()
                                                              the PC-side step ndz-studio's own site
                                                              describes ahead of packing the result as a
                                                              hack container (see `pack-hack` below).
-          ndz patch-make <base.nds> <target.nds> <out.xdelta>
+          ndz patch-make <base.nds> <target.nds> <out.xdelta> [--no-verify]
                                                              Generate an xdelta3/VCDIFF patch describing
                                                              how to turn <base.nds> into <target.nds>.
+                                                             Round-trips the written file to verify it
+                                                             actually applies back to <target.nds> - on
+                                                             by default, --no-verify skips it.
           ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz> (--target <target.nds> | --patch <patch.xdelta>)
                                      [--build-base] [--raw-dict <size>|auto] [--level 1-19]
                                      [--block-size N|auto] [--max-dict <size>] [--no-filters]
@@ -1046,13 +1049,23 @@ static int RunPatchApply(string[] args)
 
 static int RunPatchMake(string[] args)
 {
-    if (args.Length != 3)
+    var positionals = new List<string>();
+    bool noVerify = false;
+    foreach (string arg in args)
     {
-        Console.Error.WriteLine("Usage: ndz patch-make <base.nds> <target.nds> <out.xdelta>");
+        if (arg == "--no-verify")
+            noVerify = true;
+        else
+            positionals.Add(arg);
+    }
+
+    if (positionals.Count != 3)
+    {
+        Console.Error.WriteLine("Usage: ndz patch-make <base.nds> <target.nds> <out.xdelta> [--no-verify]");
         return 1;
     }
 
-    string basePath = args[0], targetPath = args[1], outPath = args[2];
+    string basePath = positionals[0], targetPath = positionals[1], outPath = positionals[2];
     byte[] baseRom = File.ReadAllBytes(basePath);
     byte[] target = File.ReadAllBytes(targetPath);
     byte[] patch = XDeltaCodec.Generate(baseRom, target);
@@ -1060,7 +1073,28 @@ static int RunPatchMake(string[] args)
 
     double ratio = target.Length == 0 ? 0 : (double)patch.Length / target.Length;
     Console.WriteLine($"Wrote '{outPath}': {target.Length:N0} -> {patch.Length:N0} bytes ({ratio:P1}).");
+
+    if (!noVerify && !VerifyPatchRoundTrip(outPath, basePath, targetPath))
+        return 1;
     return 0;
+}
+
+/// <summary>
+/// Re-reads <paramref name="patchPath"/> from disk and applies it against
+/// <paramref name="basePath"/>, comparing byte-for-byte against <paramref name="targetPath"/> -
+/// same "verify the file as it actually landed" convention as
+/// <see cref="VerifySingleRoundTrip"/>. Added after two real bugs (a windowing overflow and
+/// a DJW bitstream desync) were found in <see cref="XDeltaCodec.Generate"/>'s own encode
+/// path shortly after windowing was introduced - unlike the `.delta.ndz`/`.ndz` build paths,
+/// a standalone `.xdelta` patch previously shipped with no round-trip safety net at all. On
+/// by default; skip with --no-verify.
+/// </summary>
+static bool VerifyPatchRoundTrip(string patchPath, string basePath, string targetPath)
+{
+    byte[] applied = XDeltaCodec.Apply(File.ReadAllBytes(basePath), File.ReadAllBytes(patchPath));
+    bool ok = applied.AsSpan().SequenceEqual(File.ReadAllBytes(targetPath));
+    Console.WriteLine($"  roundtrip    {(ok ? "OK (byte-exact)" : "FAILED")}");
+    return ok;
 }
 
 /// <summary>

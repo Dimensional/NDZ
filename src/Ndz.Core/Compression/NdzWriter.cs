@@ -454,17 +454,26 @@ public static class NdzWriter
         byte[] rom, int frameOffset, int frameLength, int frameIndex, ZStdBlock plainBlock, ZStdBlock? dictBlock, int blockSize, bool enableFilters, BaseRomIndex? baseIndex, CompressionType level)
     {
         int blockCount = (frameLength + blockSize - 1) / blockSize;
-        int maxOutputSize = plainBlock.RequiredCompressOutputSize;
-        // Deliberately sized from plainBlock, not dictBlock: dictBlock's own
-        // RequiredCompressOutputSize is inflated to 1 << windowLog once WindowBits is set
-        // (megabytes, not ~8 KB) - see ComputeDictionaryWindowBits's remarks. Every
-        // candidate here (plain, dict, and every filter, which always compresses via
-        // plainBlock) compresses the same BlockSize-bounded input, so this bound is safe
-        // for all of them.
+        // dictBlock's own RequiredCompressOutputSize is inflated to 1 << windowLog once
+        // WindowBits is set (megabytes, not ~8 KB - see ComputeDictionaryWindowBits's
+        // remarks), so an earlier version of this sized the buffer from plainBlock alone,
+        // reasoning that every candidate here compresses the same BlockSize-bounded input
+        // and so can't actually NEED more than plainBlock's bound in practice. That's an
+        // unverified assumption about zstd's real behavior sitting where DictionaryAnalyzer's
+        // own sampling code (a different call site, same shared dictBlock/plainBlock shape)
+        // already takes the safe, cheap way out - Math.Max against dictBlock's own declared
+        // bound too. Matched here for the same reason: a `dictBlock.Compress` call that
+        // genuinely needed more than the buffer's real length would surface as a loud
+        // CompressionResultCode failure (not a silent overrun - GrindCore is handed the
+        // buffer's actual `.Length` as its declared capacity), so this was never an active
+        // memory-safety bug, but an avoidable "large --raw-dict pack throws unexpectedly on
+        // some adversarial block" risk is still worth removing outright rather than resting
+        // on an assumption a sibling call site had already decided not to rely on.
         //
         // Two equally-sized buffers, swapped by reference whenever a candidate beats the
         // current best, rather than one buffer per candidate mode - keeps the candidate
         // count (2 today, up to 7 with filters) cheap to extend without more allocation.
+        int maxOutputSize = Math.Max(plainBlock.RequiredCompressOutputSize, dictBlock?.RequiredCompressOutputSize ?? 0);
         byte[] bestDstBuffer = new byte[maxOutputSize];
         byte[] candidateDstBuffer = new byte[maxOutputSize];
         byte[] filterSrcBuffer = new byte[blockSize];

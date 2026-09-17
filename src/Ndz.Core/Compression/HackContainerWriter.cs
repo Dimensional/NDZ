@@ -133,7 +133,7 @@ public static class HackContainerWriter
         // (the expensive one-time cost is O(baseRom.Length) either way, same model as
         // NdzWriter's own per-Compress-call BaseRomIndex).
         int hashBits = HashChainMatcher.RecommendedHashBits(baseRom.Length);
-        var matcher = new HashChainMatcher(baseRom, ExactMatchChainSteps, hashBits, ExactMatchKeyBytes);
+        var matcher = new HashChainMatcher(baseRom, ExactMatchChainSteps, hashBits, ExactMatchKeyBytes, maxDegreeOfParallelism);
         var chunkMatcher = SelectBestChunkMatcher(baseRom, targetRom, matcher, blockSize, maxDegreeOfParallelism);
 
         int frameCount = targetRom.Length == 0 ? 0 : (targetRom.Length + frameSize - 1) / frameSize;
@@ -294,7 +294,10 @@ public static class HackContainerWriter
         ChunkRunMatcher chunkMatcher, HashChainMatcher matcher)
     {
         int blockCount = (frameLength + blockSize - 1) / blockSize;
-        int maxOutputSize = plainBlock.RequiredCompressOutputSize;
+        // Math.Max against dictBlock's own declared bound too - see NdzWriter.CompressFrame's
+        // identical sizing for why (this method shares that one's CompressBlockCandidates
+        // call just below, so the same buffer-sizing risk applies here).
+        int maxOutputSize = Math.Max(plainBlock.RequiredCompressOutputSize, dictBlock?.RequiredCompressOutputSize ?? 0);
         byte[] bestDstBuffer = new byte[maxOutputSize];
         byte[] candidateDstBuffer = new byte[maxOutputSize];
         byte[] filterSrcBuffer = new byte[blockSize];
