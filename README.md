@@ -27,8 +27,20 @@ topology: one shared base plus any number of targets, each base-patched against 
 same base (never against each other), so e.g. every regional/version release of one
 game can go in a single file, not just a base+one-target pair~~ (creating one is
 currently disabled - see the notice below; *reading* an existing pair container is
-unaffected)<!-- PAIR-DISABLED:strikethrough-end -->. The only thing left unimplemented is
-a retired, never-produced trained-dictionary flag not worth building.
+unaffected)<!-- PAIR-DISABLED:strikethrough-end -->. Also implemented: a from-scratch
+xdelta3/VCDIFF codec (`patch-apply`/`patch-make` below) for standalone `.xdelta` patches
+between two ROMs, byte-exact against real `xdelta3.exe`, and ndz-studio's `.delta.ndz`
+"hack container" format (`pack-hack` below) for packing a ROM hack or version diff cheaply
+against an already-packed base `.ndz` — both reverse-engineered/built from scratch since
+neither has a reference implementation in `ndztool.py`, see
+[`docs/xdelta-vcdiff-notes.md`](docs/xdelta-vcdiff-notes.md) and
+[`docs/ndz-format-spec.md`](docs/ndz-format-spec.md)'s hack-container section. The only
+thing left unimplemented is a retired, never-produced trained-dictionary flag not worth
+building.
+
+A desktop GUI (`src/Ndz.Gui`, Avalonia) wraps all of the above — pack/examine queues,
+hack-target attachment, and standalone `.xdelta` patch creation — see its own in-app Help
+view for a walkthrough.
 
 <!-- PAIR-DISABLED:notice-start — delete this whole blockquote, and the strikethrough
      markup immediately above, once PairContainerPolicy.CreationEnabled is true again
@@ -148,6 +160,41 @@ ndz analyze <target1.nds> [target2.nds ...] --base <base.nds> --pair
                                                   doubt, skip this and just let --block-size
                                                   auto --raw-dict auto on the real
                                                   compress --pair-out decide for you.
+ndz patch-make <base.nds> <target.nds> <out.xdelta> [--no-verify]
+                                                  Generate a standalone xdelta3/VCDIFF patch
+                                                  (RFC 3284) describing how to turn
+                                                  <base.nds> into <target.nds> - a version
+                                                  diff or ROM hack, distributable outside
+                                                  the .ndz pipeline entirely. Byte-exact
+                                                  interop with real xdelta3.exe in both
+                                                  directions. Round-trips the written file
+                                                  by default to verify it applies back to
+                                                  <target.nds>; --no-verify skips that.
+ndz patch-apply <base.nds> <patch.xdelta> <out.nds>
+                                                  Apply an xdelta3/VCDIFF patch against a
+                                                  base ROM to reconstruct the target.
+ndz pack-hack <base.nds> <base.ndz> <out.delta.ndz>
+              (--target <target.nds> | --patch <patch.xdelta>)
+              [--build-base] [--raw-dict <size>|auto] [--level 1-19]
+              [--block-size N|auto] [--max-dict <size>] [--no-filters]
+                                                  Packs a ROM hack or version diff cheaply
+                                                  against an already-packed base .ndz -
+                                                  ndz-studio's "Pack hack" feature,
+                                                  reverse-engineered since no spec exists
+                                                  from the format author (see
+                                                  docs/ndz-format-spec.md's hack-container
+                                                  section). <base.ndz> must be that exact
+                                                  base already packed via `ndz compress`.
+                                                  Give either --target (the full patched
+                                                  ROM) or --patch (an existing standalone
+                                                  .xdelta, applied internally first). xdelta
+                                                  itself is never stored in the output -
+                                                  only used, if given, to reconstruct the
+                                                  target before packing. --build-base packs
+                                                  <base.nds> into <base.ndz> first, in the
+                                                  same invocation, for when the base isn't
+                                                  already packed. Decode with `decompress
+                                                  --base-ndz <base.ndz>`.
 ```
 
 ### Hardware limits
@@ -187,9 +234,12 @@ dotnet publish src/Ndz.Cli/Ndz.Cli.csproj -c Release -r <RID>
 
 ## Layout
 
-- `src/Ndz.Core` — format types (`NdzFrontMatter`, `NdzFlags`, ...) and the
-  compressor/reader (`NdzWriter`, `NdzArchive`).
+- `src/Ndz.Core` — format types (`NdzFrontMatter`, `NdzFlags`, ...), the
+  compressor/reader (`NdzWriter`, `NdzArchive`), and the xdelta/VCDIFF codec
+  (`src/Ndz.Core/XDelta`).
 - `src/Ndz.Cli` — the `ndz` command-line tool.
+- `src/Ndz.Gui` — the Avalonia desktop GUI (pack/examine queues, hack targets,
+  standalone `.xdelta` patch creation).
 - `tests/Ndz.Core.Tests` — round-trip, random-access, and format-validation tests
   against synthetic ROM fixtures.
 

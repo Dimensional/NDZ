@@ -36,6 +36,38 @@ explicitly out of scope for what's built so far). What *is* now real: applying/g
 standalone `.xdelta`/VCDIFF patches — useful for both ROM hacks and version diffs — works
 correctly and interoperates with the real tooling.
 
+**Update 2026-09-17: real multi-window encoding, a real DJW bitstream bug found and fixed,
+and GUI wiring.** The encoder originally emitted one VCDIFF window covering the entire
+target, which real `xdelta3.exe` silently accepted for small test files but **rejected
+outright on a real 256 MB target** (`hard window size exceeded: XD3_INVALID_INPUT`) — caught
+specifically by cross-checking our own output against real `xdelta3.exe`, not just our own
+decoder, per the project's own standing "don't confirm your own bias" practice. Root cause,
+confirmed by reading the real xdelta3 3.2.0 source (not guessed): `XD3_HARDMAXWINSIZE` (64
+MiB, `xdelta3.h`) is checked **only against the target window length** (`dec_tgtlen` in
+`xdelta3-decode.h`), never against the source segment length — an earlier attempt that also
+capped each window's source-segment span caused a severe multi-minute encode regression
+before this was confirmed and removed. `VcdiffEncoder` now splits the target into real
+8 MiB (`TargetWindowSize`) windows, each with its own tightly-bounded source segment and
+encoded independently (parallelized via `Parallel.For`, `HashChainMatcher`'s hash-table
+precompute pass parallelized too).
+
+Windowing surfaced a second, previously-undetected bug: some windows' DJW-compressed
+sections failed to decode (both our own decoder and real `xdelta3.exe` rejected them) once
+sections got small/low-diversity enough. Root cause: `Djw/DjwCodec.cs`'s ported
+`BuildInitialPartition` can reduce its requested group count all the way down to 1 (real
+xdelta3's own `goto regroup` retry behavior, confirmed from `xdelta3-djw.h`), but the port
+was missing the corresponding re-check that routes to the real single-group encode path (no
+sector-size field, no selector stream) when that happens — a real bitstream desync, not a
+windowing bug per se, just never exercised before windowing produced small enough sections to
+trigger it. Fixed in `DjwCodec`; regression-tested directly (`DjwCodecTests.cs`) plus a 90-case
+fuzz sweep across every `ChooseGroupsAndSectorSize` length-tier boundary crossed with several
+byte-diversity shapes, looking for (and not finding) a sibling bug in the same area.
+
+Also wired into the GUI the same day: a "Create .xdelta patch(es)" button on a packed/raw ROM
+card (visible once at least one direct-ROM hack target is attached) generates a standalone
+`.xdelta` per target via `XDeltaCodec.Generate`, with a round-trip verify against
+`XDeltaCodec.Apply` before reporting success — plus an in-app Help view (`HelpWindow`).
+
 **Update 2026-09-16 (later the same day): the "Open question" below is now fully answered**,
 by reverse-engineering three real files a real `ndz-studio` "Pack hack" run produced, plus
 reading the real `ndzcore.js` wasm-bindgen glue the site itself loads (not guessed) — see
