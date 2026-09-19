@@ -10,7 +10,7 @@ namespace Ndz.Core.Compression;
 /// one file with no external base needed to unpack any of them - a star topology (every
 /// non-base entry patches against the one shared base, never against each other).
 /// Two-ROM shape confirmed against `ndztool.py`'s own `cmd_pack`'s `--pair-out` (see
-/// docs/ndz-remaining-work.md's "Pair container" section); the N-ROM generalization is
+/// docs/ndz-format-spec.md's "Pair container format" section); the N-ROM generalization is
 /// NOT something either reference tool's own pack path ever does (`ndztool.py`'s
 /// `cmd_pack` hardcodes `n_roms=2`) - but it needs no new wire-format bits, since the
 /// container header's own `nRoms` field, and both `ndztool.py`'s and this project's
@@ -52,8 +52,8 @@ public static class NdzPairWriter
     /// left on the table forcing one shared size on every entry - a dictionary on an
     /// already-near-perfectly-base-patched target competes with an excellent base-window
     /// match and mostly just adds its own storage cost, while the same size helps the
-    /// self-contained base a lot (confirmed on a real Pokemon Black/White pair - see
-    /// docs/ndz-remaining-work.md).
+    /// self-contained base a lot (confirmed on a real Pokemon Black/White pair - see the
+    /// `ndz-spec-provenance` project memory for the full validation history).
     /// </param>
     public static void Write(Stream output, byte[] baseRom, IReadOnlyList<byte[]> targetRoms,
         CompressionType level = NdzWriter.DefaultLevel, int blockSize = NdzConstants.BlockSize, bool enableFilters = true, int rawDictionarySize = 0, int frameSize = NdzConstants.FrameSize, IReadOnlyList<int?>? targetDictionarySizes = null, int maxDegreeOfParallelism = -1)

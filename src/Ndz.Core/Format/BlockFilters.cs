@@ -6,7 +6,7 @@ namespace Ndz.Core.Format;
 /// <see cref="BlockMode.Shuffle2"/>/<see cref="BlockMode.Shuffle4"/> - confirmed
 /// directly against `ndztool.py`'s own `_delta_fwd`/`_delta_inv`/`_shuffle_fwd`/
 /// `_shuffle_inv` (see <see cref="BlockMode"/>'s remarks and
-/// docs/ndz-remaining-work.md's "Filter modes" section). Applied before compression and
+/// docs/ndz-format-spec.md's "Block modes" section). Applied before compression and
 /// undone after, on the plain (never dictionary-primed) codec.
 /// </summary>
 public static class BlockFilters

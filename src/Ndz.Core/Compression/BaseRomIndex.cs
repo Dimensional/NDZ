@@ -6,7 +6,7 @@ namespace Ndz.Core.Compression;
 /// <summary>
 /// Pack-time index over a base ROM for base-patch mode (flags bit 4): a grain-hash
 /// table plus per-block candidate-window search, confirmed directly against
-/// `ndztool.py`'s own <c>BaseCtx</c> (see docs/ndz-remaining-work.md's "Base-ROM patch
+/// `ndztool.py`'s own <c>BaseCtx</c> (see docs/ndz-format-spec.md's "Base-ROM patch
 /// mode" section for the full writeup). Not a diff algorithm - candidates are 16 KiB
 /// windows into the base ROM, later used as one-shot raw-content zstd dictionaries.
 ///

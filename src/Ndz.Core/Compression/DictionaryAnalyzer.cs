@@ -68,9 +68,9 @@ public static class DictionaryAnalyzer
     /// end to end: Mena's own hardcoded Pokemon White 2 curve (docs/ndz-format-spec.md,
     /// "Dictionary sizing" - 5 MiB, one step before a 6 MiB uptick, even though 7 MiB
     /// recovers to a technically-smaller total) and ndz-studio's live `analyze()`
-    /// recommendation of 6 MiB on a real Pokemon Black/White ROM
-    /// (docs/ndz-remaining-work.md) - not a confirmed algorithm, just tuned to match
-    /// observed real behavior (see
+    /// recommendation of 6 MiB on a real Pokemon Black/White ROM (see the
+    /// `ndz-spec-provenance` project memory for the full validation history) - not a
+    /// confirmed algorithm, just tuned to match observed real behavior (see
     /// <c>DictionaryAnalyzerTests.SelectRecommendedSize_OnMenasWhite2ExampleCurve_PicksTheKneeNotTheGlobalMinimum</c>
     /// in the test project).
     /// </summary>

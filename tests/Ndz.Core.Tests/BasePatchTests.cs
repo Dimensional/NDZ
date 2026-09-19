@@ -6,7 +6,7 @@ namespace Ndz.Core.Tests;
 
 /// <summary>
 /// End-to-end base-patch mode: windowed raw-dictionary compression against a second
-/// ("base") ROM - see <see cref="BaseRomIndex"/> and docs/ndz-remaining-work.md's
+/// ("base") ROM - see <see cref="BaseRomIndex"/> and docs/ndz-format-spec.md's
 /// "Base-ROM patch mode" section. <see cref="BaseRomIndexTests"/> and
 /// <see cref="Blake2bTests"/> already cover the pieces this builds on in isolation.
 /// </summary>

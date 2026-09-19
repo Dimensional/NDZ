@@ -6,17 +6,12 @@ blocks, 8 KB by default) and an external seek table, built on
 [GrindCore](https://www.nuget.org/packages/GrindCore) (`Nanook.GrindCore.ZStd`).
 
 Because every frame decompresses independently, reading any byte range only requires
-decompressing the frame(s) it falls in — not the whole ROM. Verified against a real,
-independent third-party tool (`ndztool.py`), found at [NDZ-Tools](https://github.com/CotyTernes/NDZ-Tools),
-not just internally: this port can pack a real ROM and have it read correctly by real tooling, 
-and can read a real `.ndz` file (or pair container) produced by that tooling, filter-mode 
-and base-patch blocks included - confirmed end-to-end on real cartridge dumps too, not just 
-synthetic test fixtures, including a base-patched Pokémon Black/White pair (140x on the patched 
-ROM alone, from how much of the two games' content overlaps) cross-checked byte-identical against
-`ndztool.py` in every pack/read direction. See
-[`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the on-disk format, full
-implementation status, and provenance, and
-[`docs/ndz-remaining-work.md`](docs/ndz-remaining-work.md) for the build history.
+decompressing the frame(s) it falls in — not the whole ROM. Interop is verified against
+a real, independent reference tool ([NDZ-Tools](https://github.com/CotyTernes/NDZ-Tools)'s
+`ndztool.py`): this project packs ROMs that tool reads correctly, and reads files that
+tool produces, across every feature below, including on real cartridge dumps. See
+[`docs/ndz-format-spec.md`](docs/ndz-format-spec.md) for the on-disk format and full
+implementation status.
 
 Implemented: compression, random-access decompression, raw-content dictionary support
 (including for dictionaries past zstd's implicit ~8 MiB window default), all five
@@ -206,12 +201,11 @@ packs fine and then fails - or stalls - on real hardware. `NdzWriter.Compress` t
 rather than silently accept either past its limit, matching `ndztool.py`'s own refusal
 (`NDZ_MAX_LEVEL`/`NDZ_MAX_BLOCK_SIZE`).
 
-The block-size ceiling was raised from 8192 to 32768 bytes on 2026-09-06 after a
-firmware fix on the real hardware; the CLI's own `--block-size` menu is curated down to
-exactly three choices (8 KiB/16 KiB/32 KiB) rather than every power of two up to that
-ceiling, to keep the choice simple and always a safe one - a bigger block trades away
-random-access granularity (a whole block must be decompressed to reach any byte in it)
-for ratio.
+16 KiB and 32 KiB blocks became available after a firmware fix on the real hardware
+raised an earlier 8 KiB ceiling; the CLI's own `--block-size` menu is curated down to
+exactly those three choices rather than every power of two up to the limit, to keep the
+choice simple and always safe - a bigger block trades away random-access granularity (a
+whole block must be decompressed to reach any byte in it) for ratio.
 
 ROMs should be decrypted first — NDZ compresses raw bytes as-is and does no
 cryptographic work of its own.

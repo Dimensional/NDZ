@@ -7,7 +7,7 @@ namespace Ndz.Core.Tests;
 /// Pair container: two complete `.ndz` blobs (a self-contained base, and a second ROM
 /// base-patched against it) bundled with no external base needed to unpack either - see
 /// <see cref="NdzPairWriter"/>/<see cref="NdzPairContainer"/> and
-/// docs/ndz-remaining-work.md's "Pair container" section.
+/// docs/ndz-format-spec.md's "Pair container format" section.
 /// </summary>
 public class PairContainerTests
 {
