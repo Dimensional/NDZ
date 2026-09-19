@@ -8,19 +8,30 @@ this document describes it as implemented by this project (`src/Ndz.Core`).
 ## Status and provenance
 
 **This is a reverse-engineered specification, not one published by the format author.**
-It is built from two confirmed sources: the author's own reference packer
+It draws on three sources, two of which are point-in-time snapshots rather than a live
+view of the author's own implementation: the author's reference packer
 (`reference/mena-packer/pack.rs`, Rust) and a complete, self-contained pack/unpack tool
 extracted directly from the author's real implementation module
-(`reference/mena-patchbench/ndztool.py`, Python). Every claim below has been verified
-against at least one of these, and most have been cross-checked by round-tripping real
-files against the genuine reference tooling (`reference/mena-patchbench/README.md`
-covers the full provenance).
+(`reference/mena-patchbench/ndztool.py`, Python) — both frozen as of when they were
+shared. The third, the author's own deployed web tool
+([ndz-studio](https://pheeeeenom.github.io/ndz-studio/)), is closer to a live view: used
+both by probing its WASM build's behavior directly and by reading its shipped
+`ndzcore.js`/`ndzcore_bg.wasm` source, which was the only source for the hack-container
+format (see "Hack container format") — a feature the two frozen snapshots have no code
+path for at all.
 
-The format itself is still **work in progress on the author's own side** — this is not a
-finished, versioned specification we control. In particular, the multi-ROM pair-container
-dictionary design (see "Pair container") is not something the author has confirmed as
-settled or verified on real hardware. Treat this document as accurate as of the commit
-that touched it, not as a guarantee that the underlying format won't change.
+**Because two of the three sources are snapshots, they are already known to have drifted
+from the live format in at least one place** — `ndztool.py`'s complete absence of hack-
+container support isn't a gap in this project's reading of it, it's evidence the snapshot
+predates that feature; its local block-size ceiling is a second, separate case of
+confirmed drift (see "Hardware limits"). Treat a claim cited to `pack.rs`/`ndztool.py` as
+accurate as of when it was checked against that specific snapshot, not as a standing
+guarantee that the live format still matches it today — the format is still work in
+progress on the author's own side, and re-verifying against a fresh sample (or the live
+ndz-studio tool) is worthwhile before leaning hard on anything here for a new feature.
+The multi-ROM pair-container dictionary design (see "Pair container") is a further,
+separate case the author has said outright isn't settled or confirmed on real hardware
+even on their own end.
 
 ## Container layout
 
@@ -408,3 +419,9 @@ this bit set is a hard, named error rather than a silent misread.
   the strongest available reference, covering encode and decode for every feature in
   this document including base-patch and the pair container. See that folder's own
   README for full provenance.
+- [ndz-studio](https://pheeeeenom.github.io/ndz-studio/) — the format author's own
+  deployed web tool. Confirms the live `MODE_PLAIN`/`MODE_DICT` values and per-block
+  filter-mode behavior by direct observation of its WASM build, and is the sole source
+  for the hack container (`.delta.ndz`) format — reconstructed by reading its shipped
+  `ndzcore.js`/`ndzcore_bg.wasm`, since that feature has no counterpart in either source
+  above.
