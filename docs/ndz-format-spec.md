@@ -1,16 +1,30 @@
 # NDZ format — spec and implementation status
 
+**This is a reverse-engineered spec of a format that is still WIP and experimental on the
+format author's own side, not a finished, stable specification we control.** Mena Azer
+(the format author) has said outright that pieces of it - multi-ROM/pair-container
+dictionary behavior, at minimum (see "Dictionary flag split" below) - aren't a settled
+design even for them, and hasn't confirmed some of it actually works correctly on real
+hardware either way. Treat everything below as "confirmed accurate as of the date/commit
+cited," not as a promise the real format won't change out from under this document -
+re-verify against a fresh reference sample (or ask the format author) before leaning hard
+on any specific byte offset or behavior for something new.
+
 Status: v1 implemented and round-trip tested (`src/Ndz.Core`, `src/Ndz.Cli`). Corrected
 against the format author's own reference packer (a Rust implementation, `pack.rs`) on
-2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Corrections
-from the reference packer" below for exactly what changed and why. Compression,
-random-access decompression, the raw-content dictionary (flags bit 5), all five per-block
-filter modes, base-ROM patch mode (flags bit 4), and the pair-container format are all
-implemented (2026-08-31, see "Filter modes"/"Base-ROM patch mode"/"Pair container format"
-below) and cross-verified against `ndztool.py` in both directions - see
-`docs/ndz-remaining-work.md` for the full build history. The only thing left unimplemented
-is the retired trained-dictionary variant (flags bit 2), which nothing produces and isn't
-worth building - see "Open questions".
+2026-08-22 after an initial pass mis-modeled the frame/block hierarchy - see "Front-matter"
+and its "Corrected 2026-08-31" note below for what changed there, and git history for the
+frame/block correction itself (this doc has never had a single section named "Corrections
+from the reference packer," despite an earlier draft of this paragraph citing one - fixed
+here). Compression, random-access decompression, the raw-content dictionary (flags bit 5),
+all five per-block filter modes, base-ROM patch mode (flags bit 4), the pair-container
+format, and the xdelta-based `.delta.ndz` hack container (flags bit 6) are all implemented
+(2026-08-31 for the first group, 2026-09-16 for the hack container - see "Filter
+modes"/"Base-ROM patch mode"/"Pair container format"/"xdelta-based `.delta.ndz` / hack
+container" below) and cross-verified against `ndztool.py` (and, for the hack container,
+real ndz-studio output) in both directions - see `docs/ndz-remaining-work.md` for the full
+build history. The only thing left unimplemented is the retired trained-dictionary variant
+(flags bit 2), which nothing produces and isn't worth building - see "Open questions".
 
 ## Container layout
 
@@ -35,10 +49,20 @@ worth building - see "Open questions".
   this is a private structure inside a frame's own compressed bytes, invisible to the
   outer seek table. A frame's payload is laid out as:
   ```
-  [u32 csize × nblocks]   per-block compressed size
-  [u8  mode  × nblocks]   per-block compression mode (see BlockMode)
+  [u32 csize × nblocks]         per-block compressed size
+  [u8  mode  × nblocks]         per-block compression mode (see BlockMode) - only present
+                                 when the Filters flag (bit 3) is set, which this writer
+                                 always sets (see "Flags" below)
+  [u32 baseOff × nblocks]       per-block base-window offset - only present when
+                                 BasePatch (bit 4) is set WITHOUT HackContainer (bit 6);
+                                 see "Base-ROM patch mode" below
   [compressed block bytes, concatenated]
   ```
+  The mode and baseOff arrays are each independently conditional on their own flag bit -
+  an ordinary file (no dictionary, no base-patch) has neither... except `NdzWriter` always
+  writes the mode array anyway (see "Per-block compression mode" below for why). A
+  `HackContainer` (bit 6) file sets BasePatch too but - unlike ordinary base-patch mode -
+  has no baseOff array at all; see "xdelta-based `.delta.ndz` / hack container" below.
   Each block is compressed independently via `Nanook.GrindCore.ZStd.ZStdBlock` (wrapping
   `ZSTD_compressCCtx`/`ZSTD_decompressDCtx`) - a standalone ZStd frame, decodable on its
   own. This is what makes the format seekable: reading any byte range only requires
@@ -92,6 +116,12 @@ itself), confirmed against the reference packer:
 
 Anything beyond the real content size (up to the full 0x2400 slot) is zero-padded, not
 copied verbatim from the source ROM. See `NdzConstants.GetBannerContentSize`.
+
+A source ROM whose header `bannerOffset` (0x68) is zero or points past (or within 2 bytes
+of) the end of the ROM is refused outright (`InvalidDataException`) rather than packed
+with an empty banner - confirmed 2026-08-31 against both `pack.rs`'s `build_frontmatter`
+and `ndztool.py`'s `build_ndz_frontmatter`, which both hard-refuse such a ROM the same
+way. See `NdsRomInfo.FromRom`.
 
 ### Flags
 
@@ -193,7 +223,11 @@ Frames are compressed in parallel (`Parallel.For` with one pair of `ZStdBlock`s 
 and, if a dictionary is active, dictionary-primed - per worker thread, mirroring the
 reference packer's own per-thread-group compressor), then written to the output stream
 in order afterward - the resulting file is byte-identical
-regardless of how many threads did the work.
+regardless of how many threads did the work. `Compress`'s `maxDegreeOfParallelism`
+parameter (default -1, unbounded) caps how many frames compress concurrently - the CLI
+leaves it unbounded, but a GUI packing in the background has a real reason to reserve a
+core or two so an interactive window doesn't feel hung while every logical core is busy
+with level-19 zstd.
 
 `Ndz.Core.Compression.NdzArchive` is the reader: parses front-matter + outer seek table
 once, precomputes cumulative compressed-byte offsets per frame, then serves
@@ -231,6 +265,54 @@ for the same reason, and `Ndz.Cli`'s `compress` command validates both up front 
 clean usage error instead of an exception bubbling out of the library). See
 `NonDefaultBlockSizeTests.cs`'s `RejectsBlockSizeAboveTheHardwareLimit`/
 `RejectsCompressionLevelAboveTheHardwareLimit`.
+
+## Dictionary sizing
+
+**A real hardware constraint, confirmed from ndz-studio's own deployed source, and an
+original (not reference-derived) auto-sizing heuristic built against it, 2026-09-06.**
+Neither `pack.rs` nor `ndztool.py` has a dictionary-size *recommender* of its own - both
+only ever take a target size as a caller-supplied parameter (see "Dictionary input:
+size-derived, not externally-supplied" below) - so nothing here is a port of reference
+behavior the way the wire format itself is. Two distinct pieces:
+
+- **The real constraint**: on the target hardware, the raw dictionary and the
+  decompressed-block cache share one **8 MiB PSRAM pool** (`DictionaryAnalyzer.PsramBudget`,
+  read directly from ndz_studio's own deployed source) - a dictionary that eats the whole
+  budget leaves nothing for the cache that makes random access fast in the first place.
+  This is why 8 MiB is `DictionaryAnalyzer.DefaultMaxDictionarySize`'s ceiling (a
+  dictionary literally cannot exceed the whole shared pool), and why the CLI's `--max-dict`
+  (only meaningful with `--raw-dict auto`) defaults to it.
+- **The auto-sizing heuristic** (`Ndz.Core.Compression.DictionaryAnalyzer`, wired to the
+  CLI's `ndz analyze` command and `--raw-dict auto`/`--block-size auto`): estimates, via a
+  fast stratified block sample (seconds, not a full real pack), how a size ladder of
+  candidate dictionaries (0, 512 KiB, then every whole MiB up to the cap) would compress a
+  ROM, competing each candidate against the same per-block base-window search
+  `NdzWriter` really uses so a base-patched target isn't overstated. The recommendation is
+  a **diminishing-returns pick, not the literal global minimum**: the smallest candidate
+  already within a tolerance (default 1%, `DictionaryAnalyzer.DefaultDiminishingReturnsTolerance`)
+  of the best total anywhere in the curve wins, since PSRAM not spent on the dictionary is
+  normally worth more to the cache than shaving a further sliver off file size. This 1%
+  figure is tuned (not itself reference-confirmed) to reproduce two real curves end to
+  end: Mena's own hardcoded Pokemon White 2 example curve (5 MiB, one step before a 6 MiB
+  uptick, even though 7 MiB technically recovers to a smaller total than 5 MiB - the
+  dictionary's own on-disk storage cost, not just diminishing returns, can make a bigger
+  dictionary score strictly *worse*) and ndz-studio's own live `analyze()` UI feature
+  recommending 6 MiB on a real Pokemon Black/White ROM. `BlockSizeAnalyzer` applies the
+  identical diminishing-returns logic to block size instead of PSRAM (random-access
+  granularity is the resource traded away there), and its own pair-aware
+  `AnalyzePair`/`ndz analyze --pair` scores a candidate block size on the base ROM and
+  every base-patched target's estimate **combined**, not the base alone - evaluating from
+  the base alone is a real mistake this project made once: `BaseRomIndex.WindowSize` (16
+  KiB) never grows with block size, so a 32 KiB block only ever gets half covered by one
+  base-window candidate, and picking 32 KiB from the base's own flattering curve alone
+  packed a real Pokemon Black/White pair at 127.6 MB - worse than no dictionary at all
+  (112.7 MB) - before this was caught and `AnalyzePair` scored the combined total instead.
+
+None of this changes the on-disk format - `--raw-dict auto`/`--block-size auto`/`ndz
+analyze` only ever pick a plain size or block-size value that then goes through the exact
+same `NdzWriter.Compress`/`NdzPairWriter.Write` path as a manually-chosen one. See
+`DictionaryAnalyzerTests.cs`/`BlockSizeAnalyzerTests.cs` for the curve data behind the
+numbers above.
 
 ## Open questions (deferred, not guessed at)
 
@@ -335,8 +417,17 @@ One implementation detail worth knowing if this code is touched again: setting
 `WindowBits` also changes how `ZStdBlock.RequiredCompressOutputSize` is computed - it
 switches from `BlockSize`-based to `1 << windowLog`-based, which would size the
 per-block destination buffer in *megabytes* rather than ~8 KB if used directly.
-`NdzWriter.CompressFrame` deliberately sizes both the plain and dictionary-primed
-buffers from the plain block's `RequiredCompressOutputSize` to avoid that.
+`NdzWriter.CompressFrame` and `HackContainerWriter`'s equivalent candidate loop size
+their shared plain/dict/filter candidate buffer from
+`Math.Max(plainBlock.RequiredCompressOutputSize, dictBlock?.RequiredCompressOutputSize ??
+0)` (fixed 2026-09-17 - an earlier version sized from `plainBlock` alone on the
+assumption that every candidate compresses the same `BlockSize`-bounded input and so
+could never actually need more; that was never a memory-safety bug, since GrindCore is
+handed the buffer's real `.Length` as its declared capacity and an undersized buffer
+surfaces as a clean `InsufficientBuffer` result rather than an overrun, but it could
+throw unexpectedly on a large `--raw-dict` pack instead of just working, so it was
+brought in line with `DictionaryAnalyzer`'s own sibling call site, which already did
+this the safe way).
 
 ### `MODE_PLAIN`/`MODE_DICT` values — confirmed empirically against the real deployed reference tool
 
@@ -687,6 +778,18 @@ impact: Black/White 3,231,906 -> 3,231,371 bytes (-535, matching its 535 non-Ver
 blocks exactly); Dragon/Leo 957,212 -> 957,081 bytes (-131, matching its 131 non-Verbatim
 blocks) - **now 6 bytes smaller than ndz-studio's own 957,087**, meaning this overhead was
 the entire remaining gap on that pair.
+
+**Defensive checks added 2026-09-17**, from a full audit of `src/Ndz.Core` prompted by
+the DJW bitstream bug found in the VCDIFF encoder around the same time (see
+`docs/xdelta-vcdiff-notes.md`): `NdzArchive.ReadAt` now rejects a `Verbatim` block whose
+stored `csize` isn't exactly 4 (the offset field's fixed width) instead of trusting it
+and letting a corrupt file desync every later block in the frame; `NdzArchive`'s class
+doc now states plainly that an instance **isn't thread-safe** (the single-frame cache,
+the Shuffle scratch buffer, and the lazily-built base-window `ZStdBlock` dictionary are
+all shared, unsynchronized mutable state) - open one `NdzArchive` per thread for
+concurrent random-access reads rather than sharing one, which matters for the NKDS VFS
+use case this format is meant to eventually support. Neither change alters any on-disk
+format or existing behavior for well-formed files.
 
 **CDC average chunk size, auto-selected 2026-09-17**: prompted by the user asking whether
 the real packer might auto-tune chunk size the way this project's own `--raw-dict auto`/
